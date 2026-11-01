@@ -1,0 +1,7 @@
+// 서명 공통 설정. 프로젝트(Debug·Release)가 이 파일을 기본 설정으로 쓴다.
+// 개인 값(Team ID, 번들 ID 앞부분)은 같은 폴더의 Local.xcconfig에 둔다 (git 제외, Local.xcconfig.example 참고)
+
+DEVELOPMENT_TEAM =
+WER_BUNDLE_ID_PREFIX = kr.pe.hobbieco
+
+#include? "Local.xcconfig"
