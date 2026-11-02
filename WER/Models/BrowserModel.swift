@@ -85,6 +85,9 @@ final class BrowserModel {
         }
     }
 
+    /// 다른 폴더로 가면 Order가 비워져서 확인을 기다리는 이동 (끌어다 놓기, 경로 표시줄, Places, Go to Folder 등)
+    var pendingNavigation: PendingNavigation?
+
     // Run Rename 상태
     var runRequest: RunRequest?
     private(set) var runState: RunState = .idle
@@ -532,6 +535,7 @@ final class BrowserModel {
         reload()
         openCount += 1
         UserDefaults.standard.set(folder.path, forKey: Self.lastFolderKey)
+        Places.remember(folder)
     }
 
     func reload() {
@@ -574,7 +578,7 @@ final class BrowserModel {
         panel.canChooseDirectories = true
         panel.directoryURL = folder
         if panel.runModal() == .OK, let url = panel.url {
-            open(url)
+            requestNavigation(to: [url])
         }
     }
 
@@ -583,7 +587,7 @@ final class BrowserModel {
         // Order 목록도 현재 폴더 파일만 담으므로 Select 목록에서 찾는다
         let selected = items.filter { previewSelection.contains($0.url) }
         if selected.count == 1, let item = selected.first, item.isDirectory {
-            open(item.url)
+            requestNavigation(to: [item.url])
             return
         }
         selected.forEach { NSWorkspace.shared.open($0.url) }
@@ -784,6 +788,165 @@ final class BrowserModel {
         if orderedFiles.isEmpty, focusedPane == .order {
             requestFocus(.select)
         }
+    }
+}
+
+// MARK: - 다른 폴더로 이동 (확인 포함)
+
+extension BrowserModel {
+    /// 이동 요청. 폴더면 그 폴더, 파일이면 그 파일이 든 폴더로 가서 파일을 선택한다
+    struct PendingNavigation: Identifiable {
+        let id = UUID()
+        let urls: [URL]
+        /// 이동할 폴더
+        let folder: URL
+        /// Order에 놓았으면 이동한 뒤 놓은 파일을 Order에 넣는다
+        let addsToOrder: Bool
+    }
+
+    /// 다른 폴더로 이동한다. Order에 파일이 있으면 이동하면서 비워지므로 확인을 받는다.
+    /// 같은 폴더거나 갈 수 없으면 false
+    @discardableResult
+    func requestNavigation(to urls: [URL], addsToOrder: Bool = false) -> Bool {
+        guard !isRunning, let first = urls.first?.standardizedFileURL,
+              FileManager.default.fileExists(atPath: first.path) else { return false }
+        let target = Self.isDirectory(first) ? first : first.deletingLastPathComponent()
+        guard target != folder else { return false }
+        renamingURL = nil
+        let navigation = PendingNavigation(urls: urls, folder: target, addsToOrder: addsToOrder)
+        if orderedFiles.isEmpty {
+            performNavigation(navigation)
+        } else {
+            pendingNavigation = navigation
+        }
+        return true
+    }
+
+    /// Go to Folder: 경로가 있으면 이동(필요하면 확인)한다. 없는 경로면 false
+    func requestGo(to path: String) -> Bool {
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        UserDefaults.standard.set(url.path, forKey: AppSettings.lastGoToPathKey)
+        // 지금 폴더(또는 그 안의 파일)면 이동 없이 선택만
+        if !requestNavigation(to: [url]), !Self.isDirectory(url) {
+            selection = Set(items.filter { $0.url.standardizedFileURL == url }.map(\.url))
+        }
+        return true
+    }
+
+    /// Finder 등에서 다른 폴더의 항목을 놓으면 그 위치로 이동한다.
+    /// 현재 폴더의 항목이면(창 안에서 끈 것 포함) false를 돌려 원래 놓기 동작을 하게 한다
+    @discardableResult
+    func dropFromOutside(_ urls: [URL], addsToOrder: Bool) -> Bool {
+        guard renamingURL == nil, let first = urls.first?.standardizedFileURL else { return false }
+        // 현재 폴더의 항목(창 안에서 끈 하위 폴더 포함)은 이동하지 않는다. 하위 폴더는 더블클릭으로 연다
+        guard !items.contains(where: { $0.url.standardizedFileURL == first }) else { return false }
+        return requestNavigation(to: urls, addsToOrder: addsToOrder)
+    }
+
+    /// 확인 창에서 이동을 누르거나, Order가 비어 있어 바로 이동한다
+    func performNavigation(_ drop: PendingNavigation) {
+        pendingNavigation = nil
+        // 클라우드 저장소(Synology Drive 등)처럼 허용 창 없이 막히는 폴더는, 사용자가 열기 창에서 직접 고르면 열 수 있다
+        var target = drop.folder
+        if Self.isPermissionDenied(target) {
+            guard let granted = Self.askAccess(to: target) else { return }
+            target = granted
+        }
+        guard target == drop.folder else {
+            // 열기 창에서 다른 폴더를 골랐으면 그 폴더만 연다
+            open(target)
+            return
+        }
+        open(drop.folder)
+        // 놓은 파일 중 이동한 폴더에 있는 파일만 쓴다 (여러 폴더가 섞이면 첫 항목의 폴더)
+        let dropped = Set(drop.urls.map(\.standardizedFileURL))
+        let droppedFiles = files.filter { dropped.contains($0.url.standardizedFileURL) }
+        if drop.addsToOrder, !droppedFiles.isEmpty {
+            let before = orderedFiles
+            orderedFiles.append(contentsOf: droppedFiles)
+            markRecentlyAdded(after: before)
+            requestFocus(.order)
+        } else {
+            selection = Set(droppedFiles.map(\.url))
+            requestFocus(.select)
+        }
+        let skipped = drop.urls.count - (Self.isDirectory(drop.urls[0].standardizedFileURL) ? 1 : droppedFiles.count)
+        if skipped > 0 {
+            showNotice("\(skipped) items from other folders were skipped")
+        }
+    }
+
+    /// Copy To 자리에 폴더를 놓으면 복사 위치로 지정하고 Copy를 켠다. 폴더가 아니면 받지 않는다
+    func dropCopyFolder(_ urls: [URL]) -> Bool {
+        guard !isRunning, urls.count == 1, let url = urls.first?.standardizedFileURL, Self.isDirectory(url),
+              setCopyFolder(url.path) else { return false }
+        renameSettings.isCopy = true
+        return true
+    }
+
+    /// 이름 칸 입력칸에 파일을 놓으면 macOS가 경로를 글자로 넣는다. 넣은 글자가 실제 경로면 그 경로를 돌려준다
+    static func droppedPath(old: String, new: String) -> URL? {
+        guard new.count > old.count else { return nil }
+        let prefix = old.commonPrefix(with: new).count
+        let suffix = String(old.dropFirst(prefix).reversed()).commonPrefix(with: String(new.dropFirst(prefix).reversed())).count
+        var inserted = String(new.dropFirst(prefix).dropLast(suffix)).trimmingCharacters(in: .whitespacesAndNewlines)
+        if inserted.hasPrefix("file://"), let url = URL(string: inserted) { inserted = url.path }
+        // 여러 파일이면 첫 경로만 본다
+        if let first = inserted.split(whereSeparator: \.isNewline).first { inserted = String(first) }
+        guard inserted.hasPrefix("/"), FileManager.default.fileExists(atPath: inserted) else { return nil }
+        return URL(fileURLWithPath: inserted)
+    }
+
+    /// 지금 폴더가 없어졌는지 (다른 곳에서 지우거나 옮김, 볼륨 연결 끊김)
+    var isFolderMissing: Bool {
+        var isDirectory: ObjCBool = false
+        return !(FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory) && isDirectory.boolValue)
+    }
+
+    /// 없어진 폴더 대신 아직 있는 가장 가까운 상위 폴더로 간다 (Order가 있으면 확인)
+    func goToNearestExistingFolder() {
+        var candidate = folder.deletingLastPathComponent()
+        while candidate.path != "/", !FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = candidate.deletingLastPathComponent()
+        }
+        requestNavigation(to: [candidate])
+    }
+
+    /// 지금 폴더를 읽지 못했을 때(상태 바의 Allow Access…) 열기 창으로 허용을 받아 다시 연다
+    func requestAccessToCurrentFolder() {
+        guard let granted = Self.askAccess(to: folder) else { return }
+        if granted == folder { reload() } else { requestNavigation(to: [granted]) }
+    }
+
+    /// 폴더 목록을 읽을 수 없는지. 목록을 읽는 코드(FolderLoader)로 그대로 확인한다.
+    /// 막히는 이유가 개인정보 보호·클라우드 저장소 등 여러 가지라, 읽지 못하면 모두 열기 창으로 허용을 받아 본다
+    static func isPermissionDenied(_ folder: URL) -> Bool {
+        do {
+            _ = try FolderLoader.loadWithSizes(folder, showHidden: false)
+            return false
+        } catch let error as NSError {
+            let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError
+            NSLog("[WER] Can't read %@: %@ %d / %@ %d", folder.path, error.domain, error.code,
+                  underlying?.domain ?? "-", underlying?.code ?? 0)
+            return true
+        }
+    }
+
+    /// 그 폴더를 미리 연 열기 창을 띄워 접근 허용을 받는다. 사용자가 고른 폴더를 돌려준다 (취소하면 nil)
+    static func askAccess(to folder: URL) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.directoryURL = folder
+        panel.prompt = "Allow"
+        panel.message = "macOS needs your permission to open “\(FileManager.default.displayName(atPath: folder.path))”. Click Allow to open this folder."
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.standardizedFileURL
+    }
+
+    static func isDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
     }
 }
 

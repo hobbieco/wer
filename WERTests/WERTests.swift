@@ -333,6 +333,52 @@ struct PresetTests {
     }
 }
 
+struct AddExtensionTests {
+    @Test func addsOnlyToFilesWithoutExtension() {
+        var settings = RenameSettings()
+        settings.tokens[0] = NameToken(kind: .addExtension, value: "pdf")
+        settings.tokens[1] = NameToken(kind: .removeExtension, value: "bak")
+        #expect(settings.newName(for: "invoice", index: 0) == "invoice.pdf")
+        #expect(settings.newName(for: "a.txt", index: 0) == "a.txt")
+        // 지운 결과에 다시 붙이지 않는다 (규칙은 한 번만)
+        #expect(settings.newName(for: "b.bak", index: 0) == "b")
+        #expect(settings.buildNewName(for: "invoice", index: 0)?.highlights == [NameHighlight(start: 8, length: 3, slot: 0)])
+        #expect(settings.isValid)
+        #expect(RenameSettings.extensionCounts(of: ["invoice", "a.txt", "b"])[""] == 2)
+        // Add Ext끼리는 겹친다. Change Ext txt와는 겹치지 않는다
+        settings.tokens[2] = NameToken(kind: .changeExtension, value: "pdf", option: "txt")
+        #expect(settings.isValid)
+        settings.tokens[3] = NameToken(kind: .addExtension, value: "txt")
+        #expect(RenameSettings.extensionConflicts(in: settings.tokens) == [0: 3, 3: 0])
+    }
+}
+
+struct MissingFolderTests {
+    @MainActor @Test func goesToNearestExistingFolder() throws {
+        let base = FileManager.default.temporaryDirectory.appending(path: "wer-missing-\(UUID().uuidString)")
+        let deep = base.appending(path: "a/b")
+        try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let model = BrowserModel(folder: deep)
+        try FileManager.default.removeItem(at: base.appending(path: "a"))
+        #expect(model.isFolderMissing)
+        model.goToNearestExistingFolder()
+        #expect(model.folder.standardizedFileURL.path == base.standardizedFileURL.path)
+        #expect(!model.isFolderMissing)
+    }
+}
+
+struct FileDropTests {
+    @MainActor @Test func droppedPathIsDetected() throws {
+        let path = FileManager.default.temporaryDirectory.path
+        #expect(BrowserModel.droppedPath(old: "wer-", new: "wer-" + path) == URL(fileURLWithPath: path))
+        #expect(BrowserModel.droppedPath(old: "", new: "file://" + path)?.path == URL(fileURLWithPath: path).path)
+        // 일반 입력이나 없는 경로는 그대로
+        #expect(BrowserModel.droppedPath(old: "wer", new: "wer-") == nil)
+        #expect(BrowserModel.droppedPath(old: "", new: "/no/such/path") == nil)
+    }
+}
+
 struct DefaultPresetTests {
     @Test func oldFiveSlotPresetIsPaddedToSix() throws {
         let old = RenamePreset(name: "old", tokens: (0..<5).map { _ in NameToken(kind: .text, value: "a") }, usesSeparator: true)
@@ -357,6 +403,7 @@ struct DefaultPresetTests {
         // 바뀐 확장자는 Change Ext 칸(0번) 색으로 칠한다
         #expect(settings.buildNewName(for: "IMG_12.jpeg", index: 0)?.highlights == [NameHighlight(start: 7, length: 3, slot: 0)])
         #expect(settings.newName(for: "report.docx.bak", index: 0) == "report.docx")
+        #expect(settings.newName(for: "IMG_sample", index: 0) == "IMG_sample.jpg")
         #expect(settings.newName(for: "a.png", index: 0) == "a.png")
         #expect(settings.isValid)
     }
@@ -380,7 +427,7 @@ struct DefaultPresetTests {
         #expect(settings.newName(for: "c.png", index: 0) == "c.png")
         // 대소문자까지 완전 일치
         #expect(settings.newName(for: "d.JPEG", index: 0) == "d.JPEG")
-        #expect(RenameSettings.extensionCounts(of: ["a.jpeg", "b.JPEG", "c.jpeg", "d"]) == ["jpeg": 2, "JPEG": 1])
+        #expect(RenameSettings.extensionCounts(of: ["a.jpeg", "b.JPEG", "c.jpeg", "d"]) == ["jpeg": 2, "JPEG": 1, "": 1])
         // 이름 조각과 함께 쓰면 순서·구분자와 상관없이 확장자만 바꾼다
         settings.tokens[3] = NameToken(kind: .text, value: "x")
         #expect(settings.newName(for: "b.jpeg", index: 0) == "x.jpg")

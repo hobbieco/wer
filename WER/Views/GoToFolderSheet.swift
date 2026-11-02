@@ -18,6 +18,7 @@ struct GoToFolderSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var path = ""
     @State private var suggestions: [String] = []
+    @AppStorage(AppSettings.monospacedNamesKey) private var monospacedNames = true
     @State private var highlighted: String?
     // 폴더 목록 모드일 때 목록의 기준 폴더. 직접 입력 중이면 nil
     @State private var listingFolder: String?
@@ -45,6 +46,7 @@ struct GoToFolderSheet: View {
             Text(title)
                 .font(.headline)
             TextField("~/Documents", text: $path)
+                .font(AppSettings.fieldFont(monospaced: monospacedNames))
                 .onChange(of: path) {
                     errorMessage = nil
                     // 후보 선택으로 채운 경우에는 목록을 유지한다
@@ -65,6 +67,7 @@ struct GoToFolderSheet: View {
                 List(suggestions, id: \.self, selection: highlightBinding) { suggestion in
                     Label {
                         Text(suggestion)
+                            .font(AppSettings.fieldFont(monospaced: monospacedNames))
                             .lineLimit(1)
                             .truncationMode(.head)
                     } icon: {

@@ -83,12 +83,13 @@ nonisolated struct RenamePreset: Identifiable, Codable, Equatable {
 
     static let fixExtensionsName = "Fix Extensions"
 
-    /// 확장자 규칙 예시 프리셋: [Change Ext] jpeg → jpg, [Remove Ext] bak. 이름은 그대로 두고 확장자만 바꾼다.
+    /// 확장자 규칙 예시 프리셋: [Change Ext] jpeg → jpg, [Remove Ext] bak, [Add Ext] jpg. 이름은 그대로 두고 확장자만 바꾼다.
     /// 일반 프리셋이라 이름을 바꾸거나 지울 수 있다
     static var builtInFixExtensions: RenamePreset {
         let tokens = [
             NameToken(kind: .changeExtension, value: "jpeg", option: "jpg"),
             NameToken(kind: .removeExtension, value: "bak"),
+            NameToken(kind: .addExtension, value: "jpg"),
         ]
         return RenamePreset(name: fixExtensionsName, tokens: fitted(tokens), usesSeparator: true)
     }
@@ -103,6 +104,7 @@ nonisolated struct RenamePreset: Identifiable, Codable, Equatable {
             case .regex: "Regex"
             case .changeExtension: "Change Ext"
             case .removeExtension: "Remove Ext"
+            case .addExtension: "Add Ext"
             }
             let option = switch token.kind {
             case .number where !token.option.isEmpty: " step \(token.option)"
@@ -191,7 +193,7 @@ final class PresetStore {
     /// Fix Extensions: 바꾸기·지우기·해당 없음. 나머지(Default와 새 프리셋): 연번과 정규식 불일치
     private func defaultSamples(for id: RenamePreset.ID) -> [String] {
         if id != RenamePreset.defaultID, preset(id)?.name == RenamePreset.fixExtensionsName {
-            return ["IMG_1234.jpeg", "IMG_0007.jpeg.bak", "IMG_sample.jpg"]
+            return ["IMG_1234.jpeg", "IMG_0007.jpeg.bak", "IMG_sample"]
         }
         return ["IMG_1234.jpg", "IMG_0007.jpg", "IMG_sample.jpg"]
     }
@@ -203,6 +205,7 @@ final class PresetStore {
             ["IMG_1234.jpeg", "", ""],
             ["IMG_1234.jpg", "", ""],
             ["IMG_1234.jpeg", "report.docx.bak", "notes.txt"],
+            ["IMG_1234.jpeg", "IMG_0007.jpeg.bak", "IMG_sample.jpg"],
         ]
         var changed = false
         for (id, saved) in samples where outdated.contains(saved) {
@@ -330,6 +333,7 @@ final class PresetStore {
         migrateLegacyFallbacks()
         updateBuiltInDefault()
         addFixExtensionsOnce()
+        updateBuiltInFixExtensions()
         AppSettings.Legacy.all.forEach(UserDefaults.standard.removeObject(forKey:))
         persist()
     }
@@ -355,6 +359,16 @@ final class PresetStore {
                 presets[index].tokens[slot] = NameToken(separator: token.separator)
             }
         }
+    }
+
+    /// 이미 만든 Fix Extensions가 고치지 않은 예전 내용(Change Ext·Remove Ext뿐)이면 Add Ext 예시를 넣는다
+    private func updateBuiltInFixExtensions() {
+        guard let index = presets.firstIndex(where: { $0.name == RenamePreset.fixExtensionsName && !$0.isDefault }) else { return }
+        let tokens = presets[index].tokens
+        let old = [NameToken.Kind.changeExtension, .removeExtension] + Array(repeating: .none, count: max(tokens.count - 2, 0))
+        guard tokens.map(\.kind) == old, tokens[0].value == "jpeg", tokens[0].option == "jpg", tokens[1].value == "bak",
+              tokens.count > 2 else { return }
+        presets[index].tokens[2] = NameToken(kind: .addExtension, value: "jpg", separator: tokens[2].separator)
     }
 
     /// Fix Extensions 예시 프리셋을 만들었는지. 사용자가 지우면 다시 만들지 않는다

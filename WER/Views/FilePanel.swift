@@ -99,14 +99,14 @@ struct SelectPanel: View {
                     // 폴더 하나를 더블클릭하면 이동, 파일은 Order에 추가 (여러 개 선택했으면 선택한 파일 전체)
                     let clicked = model.items.filter { urls.contains($0.url) }
                     if clicked.count == 1, let folder = clicked.first, folder.isDirectory {
-                        model.open(folder.url)
+                        model.requestNavigation(to: [folder.url])
                     } else if clicked.contains(where: { !$0.isDirectory }) {
                         model.addToOrder()
                     }
                 }
-                // Order에서 끌어다 놓으면 Order 목록에서 제거
+                // Order에서 끌어다 놓으면 Order 목록에서 제거. Finder에서 다른 폴더의 항목을 놓으면 그 위치로 이동
                 .dropDestination(for: URL.self) { urls, _ in
-                    model.removeFromOrder(urls)
+                    _ = model.removeFromOrder(urls) || model.dropFromOutside(urls, addsToOrder: false)
                 }
                 .onChange(of: model.openCount) {
                     // 폴더를 열면 선택한 항목(상위 폴더로 나오면 방금 있던 폴더)으로, 선택이 없으면 맨 위로
@@ -194,6 +194,8 @@ struct SelectListRow: Identifiable, Hashable {
 /// Select 목록 행의 이름 입력칸. Finder처럼 확장자를 뺀 부분을 골라 둔 채 시작한다.
 /// Return이나 다른 곳을 누르면 확정, Esc는 취소 (onFinish(nil))
 struct InlineRenameField: View {
+    @AppStorage(AppSettings.monospacedNamesKey) private var monospacedNames = true
+    @AppStorage(AppSettings.listTextSizeKey) private var textSize = AppSettings.ListTextSize.small
     let item: FileItem
     let onFinish: (String?) -> Void
 
@@ -212,6 +214,7 @@ struct InlineRenameField: View {
     var body: some View {
         Label {
             TextField("Name", text: $name, selection: $textSelection)
+                .font(textSize.nameFont(monospaced: monospacedNames))
                 .labelsHidden()
                 .focused($isFocused)
                 .onSubmit { finish(name) }
@@ -235,7 +238,7 @@ struct InlineRenameField: View {
         } icon: {
             Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
                 .resizable()
-                .frame(width: 16, height: 16)
+                .frame(width: textSize.iconSize, height: textSize.iconSize)
         }
         .listRowSeparator(.hidden)
     }
@@ -272,6 +275,8 @@ struct InlineRenameField: View {
 
 /// 파일 정렬. Add로 추가한 파일을 리네임 순서대로 정렬한다.
 struct OrderPanel: View {
+    @AppStorage(AppSettings.listTextSizeKey) private var textSize = AppSettings.ListTextSize.small
+    @AppStorage(AppSettings.monospacedNamesKey) private var monospacedNames = true
     @Bindable var model: BrowserModel
     @FocusState private var isTableFocused: Bool
 
@@ -322,7 +327,10 @@ struct OrderPanel: View {
                                 .frame(width: 14)
                                 .help(row.issue ?? "")
                             // Apply 전에는 비워 둔다
-                            Text(HighlightedText.make(row.newName ?? "", highlights: row.newNameHighlights))
+                            Text(HighlightedText.make(
+                                row.newName ?? "", highlights: row.newNameHighlights,
+                                font: textSize.nameFont(monospaced: monospacedNames)
+                            ))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .foregroundStyle(row.isConflict ? .red : .primary)
@@ -336,7 +344,10 @@ struct OrderPanel: View {
                             .draggable(row.item.url)
                     }
                     .dropDestination(for: URL.self) { index, urls in
-                        model.dropOnOrder(urls, at: index)
+                        // Finder에서 다른 폴더의 파일을 놓으면 그 폴더로 이동해 Order에 넣는다
+                        if !model.dropFromOutside(urls, addsToOrder: true) {
+                            model.dropOnOrder(urls, at: index)
+                        }
                     }
                 }
                 .focused($isTableFocused)
@@ -357,7 +368,9 @@ struct OrderPanel: View {
                 }
                 // 행이 없거나 마지막 행 아래에 놓으면 맨 끝에 추가
                 .dropDestination(for: URL.self) { urls, _ in
-                    model.dropOnOrder(urls, at: model.orderedFiles.count)
+                    if !model.dropFromOutside(urls, addsToOrder: true) {
+                        model.dropOnOrder(urls, at: model.orderedFiles.count)
+                    }
                     return true
                 }
                 .onChange(of: model.recentlyAdded) {
@@ -543,10 +556,31 @@ enum RegexPalette {
     }
 }
 
+extension AppSettings {
+    /// 이름 조각·패턴·경로를 넣는 입력칸 글꼴. 크기는 기본 그대로 두고 종류만 고정폭으로 바꾼다
+    /// (목록 글자 크기를 따라가면 Rename 칸 높이·폭이 맞지 않는다)
+    static func fieldFont(monospaced: Bool) -> Font {
+        Font(monospaced
+            ? NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            : NSFont.systemFont(ofSize: NSFont.systemFontSize))
+    }
+}
+
+extension AppSettings.ListTextSize {
+    /// 목록의 파일 이름 글꼴. 고정폭이면 AppKit 고정폭 시스템 글꼴(SF Mono)
+    func nameFont(monospaced: Bool) -> Font {
+        Font(monospaced
+            ? NSFont.monospacedSystemFont(ofSize: pointSize, weight: .regular)
+            : NSFont.systemFont(ofSize: pointSize))
+    }
+}
+
 enum HighlightedText {
-    /// highlights 위치를 조각 색 배경으로 칠한 문자열
-    static func make(_ string: String, highlights: [NameHighlight]) -> AttributedString {
+    /// highlights 위치를 조각 색 배경으로 칠한 문자열. font를 주면 문자열 자체에 넣는다
+    /// (뷰의 .font 수정자는 표 칸 안의 AttributedString에 적용되지 않는 경우가 있다)
+    static func make(_ string: String, highlights: [NameHighlight], font: Font? = nil) -> AttributedString {
         var text = AttributedString(string)
+        if let font { text.font = font }
         let characters = text.characters
         for highlight in highlights where highlight.start + highlight.length <= characters.count {
             let lower = characters.index(characters.startIndex, offsetBy: highlight.start)
@@ -565,6 +599,9 @@ struct FileRow: View {
     var size: Int64?
     var showsSize = false
 
+    @AppStorage(AppSettings.listTextSizeKey) private var textSize = AppSettings.ListTextSize.small
+    @AppStorage(AppSettings.monospacedNamesKey) private var monospacedNames = true
+
     var body: some View {
         Label {
             HStack(spacing: 8) {
@@ -574,7 +611,7 @@ struct FileRow: View {
                 if showsSize {
                     Spacer(minLength: 0)
                     Text(size.map { $0.formatted(.byteCount(style: .file)) } ?? "--")
-                        .font(.caption)
+                        .font(.system(size: textSize.pointSize - 3))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -584,12 +621,12 @@ struct FileRow: View {
         } icon: {
             Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
                 .resizable()
-                .frame(width: 16, height: 16)
+                .frame(width: textSize.iconSize, height: textSize.iconSize)
         }
         .listRowSeparator(.hidden)
     }
 
     private var highlightedName: AttributedString {
-        HighlightedText.make(item.name, highlights: highlights)
+        HighlightedText.make(item.name, highlights: highlights, font: textSize.nameFont(monospaced: monospacedNames))
     }
 }

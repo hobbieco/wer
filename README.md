@@ -24,7 +24,7 @@ Batch renamers didn't help much, because they number files by a sort key — nam
 
 ## Features
 
-- **Select** files in a folder (folders are shown but never renamed). Finder-like path bar, Go to Folder with path completion, number order (file2, file10) or text order (file10, file2).
+- **Select** files in a folder (folders are shown but never renamed). Finder-like path bar with a Places menu (favorites, iCloud Drive and cloud storage such as Synology Drive, volumes, recent folders), Go to Folder with path completion, number order (file2, file10) or text order (file10, file2).
 - **Order** the files that will be renamed: move up/down, by 10, to top/bottom, drag, reverse, reset to folder order.
 - **Rename** with up to six slots, each one of:
   - **Text** — fixed text, in two fields joined together (e.g. `wer-` + `rename`)
@@ -32,12 +32,13 @@ Batch renamers didn't help much, because they number files by a sort key — nam
   - **Number** — sequence with start, digits and step (e.g. `0001`, step `1`)
   - **Change Ext** — change one extension to another, exact match (e.g. `jpeg` → `jpg`)
   - **Remove Ext** — remove an extension, exact match (e.g. `bak` to turn `report.docx.bak` back into `report.docx`)
+  - **Add Ext** — add an extension to files that have none, such as downloads from a server (e.g. `jpg`: `IMG_sample` → `IMG_sample.jpg`)
   - Extension rules apply once per file, to its original extension; a result is never changed again by another rule.
-- Per-part separators, colored highlights that show which part made which piece of the new name. Extension rules show how many files in Order have their extension (orange when none).
-- Empty required fields are outlined in orange, invalid ones in red.
+- Per-part separators, colored highlights that show which part made which piece of the new name. Extension rules show how many files in Order they match (orange when none). Empty required fields are outlined in orange, invalid ones in red.
 - **Checks before running**: duplicate names, names already in the folder, invalid characters (`/`, `:`), names longer than 255 bytes, hidden names, regex mismatches. Case-sensitive and case-insensitive volumes are handled.
-- **Presets**: save and load naming rules. A preset can keep empty fields to fill in after loading (marked ⚠). Built-in examples: **Default** (Text, Regex, Number) and **Fix Extensions** (Change Ext, Remove Ext).
-- **Copy mode**: write renamed copies to another folder instead of renaming originals.
+- **Presets**: save and load naming rules. A preset can keep empty fields to fill in after loading (marked ⚠). Built-in examples: **Default** (Text, Regex, Number) and **Fix Extensions** (Change Ext, Remove Ext, Add Ext).
+- **Copy mode**: write renamed copies to another folder instead of renaming originals. Drop a folder on Copy To to choose it.
+- **Display**: list text size (Small, Medium, Large) and a fixed-width font for file names and name fields, so numbers line up (on by default).
 
 ## Safety
 
@@ -49,7 +50,7 @@ Batch renamers didn't help much, because they number files by a sort key — nam
 
 ## Usage
 
-1. **Open a folder** — File > Open Folder… (⇧⌘O), Go to Folder… (⇧⌘G), or `open -a WER <folder>` from Terminal.
+1. **Open a folder** — File > Open Folder… (⇧⌘O), Go to Folder… (⇧⌘G), the Places menu at the start of the path bar, `open -a WER <folder>` from Terminal, or drag a folder or file from Finder onto the window or the Dock icon. A dropped file opens its folder with the file selected; dropped onto Order, the files are also added to Order. If Order has files, you're asked before it's cleared. Cloud storage folders such as Synology Drive may ask you once to allow access in an Open dialog.
 2. **Pick files in Select** and add them to **Order** — ⌘→, double-click, or drag. ⌥⌘→ adds every file in the folder.
 3. **Arrange Order** — ⌘↑ / ⌘↓ moves the selection, ⌥⌘↑ / ⌥⌘↓ to top or bottom, drag to move, ⇧⌘R reverses. New names are numbered in this order.
 4. **Build the rule in Rename** — choose a type for each slot (⌘1–⌘6 opens the type menu) and fill in its fields, which start empty, or load a preset (⌘L). Turn on **Separator** to join the parts with the separators you set.
@@ -58,9 +59,9 @@ Batch renamers didn't help much, because they number files by a sort key — nam
 
 Example — rename photos to `trip-0001.jpg`, `trip-0002.jpg`, …: slot 1 **Text** `trip`, slot 2 **Number** `0001` with step `1`, Separator on with `-`. The extension is kept.
 
-Example — fix extensions only: load **Fix Extensions**. `IMG_1234.jpeg` becomes `IMG_1234.jpg`, `IMG_0007.jpeg.bak` becomes `IMG_0007.jpeg`, and other files keep their names.
+Example — fix extensions only: load **Fix Extensions**. `IMG_1234.jpeg` becomes `IMG_1234.jpg`, `IMG_0007.jpeg.bak` becomes `IMG_0007.jpeg`, `IMG_sample` (no extension) becomes `IMG_sample.jpg`, and other files keep their names.
 
-Settings (⌘,) holds the startup preset, start folders, and presets you can edit while checking the result on up to three sample names:
+Settings (⌘,) holds the startup preset, start folders, list text size and fixed-width font, and presets you can edit while checking the result on up to three sample names:
 
 <p align="center">
   <img src="docs/images/wer-setting-general.png" alt="Settings: General" width="360">

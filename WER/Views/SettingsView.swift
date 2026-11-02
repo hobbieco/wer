@@ -42,6 +42,8 @@ private struct GeneralSettingsView: View {
     @AppStorage(AppSettings.removeCopiesToTrashKey) private var removesCopiesToTrash = false
     @AppStorage(AppSettings.previewAutoplaysMediaKey) private var previewAutoplaysMedia = false
     @AppStorage(AppSettings.sortFoldersFirstKey) private var sortsFoldersFirst = true
+    @AppStorage(AppSettings.listTextSizeKey) private var listTextSize = AppSettings.ListTextSize.small
+    @AppStorage(AppSettings.monospacedNamesKey) private var monospacedNames = true
 
     var body: some View {
         Form {
@@ -117,6 +119,16 @@ private struct GeneralSettingsView: View {
                 Text("Used when a failed copy is reverted, when undoing a copy, and when recovering an interrupted copy. Originals are never touched.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            Section("List") {
+                Picker("Text Size", selection: $listTextSize) {
+                    ForEach(AppSettings.ListTextSize.allCases, id: \.self) { size in
+                        Text(size.title).tag(size)
+                    }
+                }
+                .help("Text size of the Select and Order lists")
+                Toggle("Monospaced Names and Fields", isOn: $monospacedNames)
+                    .help("Show file names in Select and Order, and the name, pattern and path fields, in a fixed-width font so numbers line up")
             }
             Section("Sort") {
                 Toggle("Folders First", isOn: $sortsFoldersFirst)
@@ -308,6 +320,7 @@ private struct PresetEditor: View {
     let onSampleChange: (Int, String) -> Void
     let onChange: (RenamePreset) -> Void
 
+    @AppStorage(AppSettings.monospacedNamesKey) private var monospacedNames = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -340,6 +353,7 @@ private struct PresetEditor: View {
                             onSampleChange(row, $0)
                         })
                         .textFieldStyle(.roundedBorder)
+                        .font(AppSettings.fieldFont(monospaced: monospacedNames))
                         sampleResult(row)
                             .gridColumnAlignment(.leading)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -365,7 +379,9 @@ private struct PresetEditor: View {
                     .foregroundStyle(.secondary)
             } else {
                 // 글자 선택을 켜면 배경색이 그려지지 않아 끈다
-                Text(HighlightedText.make(built.name, highlights: built.highlights))
+                Text(HighlightedText.make(
+                    built.name, highlights: built.highlights, font: AppSettings.fieldFont(monospaced: monospacedNames)
+                ))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .help(built.name)

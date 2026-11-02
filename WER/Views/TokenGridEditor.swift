@@ -18,6 +18,10 @@ struct TokenGridEditor: View {
     var focusRequest: UUID?
     /// Order 파일의 확장자별 개수. 확장자 규칙 줄의 구분자 자리에 일치 파일 수로 보여준다 (설정의 프리셋 편집은 nil)
     var extensionCounts: [String: Int]?
+    /// 입력칸에 Finder의 파일·폴더를 놓았을 때 (Rename 칸은 그 위치로 이동, 설정은 nil이라 무시).
+    /// 입력칸에는 경로가 글자로 들어가지 않게 되돌린다
+    var onFileDrop: (([URL]) -> Void)?
+    @AppStorage(AppSettings.monospacedNamesKey) private var monospacedNames = true
 
     @State private var hoveredSlot: Int?
     // 손잡이를 끄는 중인 칸과 놓을 자리
@@ -47,23 +51,27 @@ struct TokenGridEditor: View {
             ForEach(Array($tokens.enumerated()), id: \.element.id) { slot, $token in
                 GridRow {
                     handle(slot: slot, token: token)
-                    // Default 프리셋과 같은 순서 (None은 구분선으로 분리)
-                    Picker("Type", selection: kindBinding($token)) {
-                        Text("None").tag(NameToken.Kind.none)
-                        Divider()
-                        Text("Text").tag(NameToken.Kind.text)
-                        Text("Regex").tag(NameToken.Kind.regex)
-                        Text("Number").tag(NameToken.Kind.number)
-                        Divider()
-                        Text("Change Ext").tag(NameToken.Kind.changeExtension)
-                        Text("Remove Ext").tag(NameToken.Kind.removeExtension)
+                    // 종류 선택. SwiftUI Picker는 글자를 가운데 정렬해 종류마다 앞 여백이 달라서,
+                    // 왼쪽 정렬 버튼으로 그리고 ⌘1~6과 같은 AppKit 메뉴를 띄운다
+                    Button { openKindMenu(slot: slot) } label: {
+                        HStack(spacing: 4) {
+                            Text(Self.title(for: token.kind))
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    .frame(width: 90)
+                    // "Change Ext", "Remove Ext"가 줄지 않고 들어가는 폭
+                    .frame(width: 112)
+                    .accessibilityLabel("Slot \(slot + 1) type")
+                    .accessibilityValue(Self.title(for: token.kind))
                     // ⌘1~6 메뉴를 띄울 자리
                     .background(MenuAnchor { menuAnchors.views[token.id] = $0 })
                     // 비활성 칸은 회색 배경으로 구분한다 (None 줄 전체, 쓰지 않는 구분자)
                     let isNone = token.kind == .none
-                    let isOptionDisabled = isNone || token.kind == .removeExtension
+                    let isOptionDisabled = isNone || token.kind == .removeExtension || token.kind == .addExtension
                     let isSeparatorDisabled = !token.kind.isNamePart || !usesSeparator || isOmittedSeparator(slot)
                     // 형식 오류는 빨강, 빈 칸은 주황 테두리.
                     // Text 두 칸이 모두 비면 커서가 있는 칸에 표시한다 (커서가 없으면 첫 칸)
@@ -72,6 +80,8 @@ struct TokenGridEditor: View {
                     let conflictError = extensionConflicts[slot].map(RenameSettings.conflictMessage)
                     // 예시(placeholder)는 값으로 오해해 지우려 하게 되어 두지 않는다. 형식은 도움말로 안내한다
                     TextField("", text: $token.value)
+                        .font(AppSettings.fieldFont(monospaced: monospacedNames))
+                        .fileDropGuard($token.value, onDrop: onFileDrop)
                         .focused($focusedField, equals: FieldID(token: token.id, column: 0))
                         .multilineTextAlignment(.center)
                         .invalidBorder(
@@ -83,9 +93,12 @@ struct TokenGridEditor: View {
                         .disabledBackground(isNone)
                     // 두 번째 칸: Text 뒤 문자열(비우면 무시), Number 증가 폭, Regex 채우기 모양
                     TextField("", text: $token.option)
+                        .font(AppSettings.fieldFont(monospaced: monospacedNames))
+                        .fileDropGuard($token.option, onDrop: onFileDrop)
                         .focused($focusedField, equals: FieldID(token: token.id, column: 1))
                         .multilineTextAlignment(.center)
-                        .frame(width: 66)
+                        // 고정폭 글꼴로 8글자 정도 (예: rename-01)
+                        .frame(width: 80)
                         .invalidBorder(
                             token.optionError != nil && !token.needsOption,
                             needsInput: token.needsOption || isEmptyTextOnOption || token.warning != nil
@@ -99,6 +112,8 @@ struct TokenGridEditor: View {
                         extensionCountLabel(token)
                     } else {
                         TextField("Sep", text: $token.separator)
+                            .font(AppSettings.fieldFont(monospaced: monospacedNames))
+                            .fileDropGuard($token.separator, onDrop: onFileDrop)
                             .focused($focusedField, equals: FieldID(token: token.id, column: 2))
                             .multilineTextAlignment(.center)
                             .frame(width: 30)
@@ -229,7 +244,7 @@ struct TokenGridEditor: View {
         let menu = NSMenu()
         var current: NSMenuItem?
         // Picker와 같은 순서 (None은 구분선으로 분리)
-        for kind in [NameToken.Kind.none, .text, .regex, .number, .changeExtension, .removeExtension] {
+        for kind in [NameToken.Kind.none, .text, .regex, .number, .changeExtension, .removeExtension, .addExtension] {
             let item = MenuAction.item(title: Self.title(for: kind)) {
                 guard let index = tokens.firstIndex(where: { $0.id == tokenID }) else { return }
                 Self.select(kind, for: &tokens[index])
@@ -258,6 +273,7 @@ struct TokenGridEditor: View {
         case .number: "Number"
         case .changeExtension: "Change Ext"
         case .removeExtension: "Remove Ext"
+        case .addExtension: "Add Ext"
         }
     }
 
@@ -265,21 +281,32 @@ struct TokenGridEditor: View {
     private func extensionCountLabel(_ token: NameToken) -> some View {
         // 파일 정보가 없거나(설정의 프리셋 편집) 대상이 비었거나 잘못되면 일치 파일이 없는 것으로 보고 0
         let count = token.validationError == nil
-            ? extensionCounts?[RenameSettings.extensionKey(token.value)] ?? 0
+            ? token.extensionTarget.flatMap { extensionCounts?[$0] } ?? 0
             : 0
+        // Add Ext는 확장자가 없는 파일 수
+        let target = token.kind == .addExtension ? "no extension" : ".\(token.value)"
         let help = if extensionCounts == nil {
-            "Number of files in Order with this extension (exact match, case-sensitive)"
+            token.kind == .addExtension
+                ? "Number of files in Order without an extension"
+                : "Number of files in Order with this extension (exact match, case-sensitive)"
         } else if count == 0 {
-            token.value.isEmpty ? "No files match an empty extension" : "No files with .\(token.value) in Order (exact match, case-sensitive)"
+            token.value.isEmpty ? "Enter an extension first" : "No files with \(target) in Order"
         } else {
-            "\(count) files with .\(token.value) in Order"
+            "\(count) files with \(target) in Order"
         }
-        return Text(count > 99 ? "99+" : String(count))
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(count == 0 ? Color.orange : Color.primary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
+        // 구분자 칸과 크기·회색 배경이 같도록 비활성 입력칸 위에 숫자를 얹는다
+        return TextField("", text: .constant(""))
+            .disabled(true)
             .frame(width: 30)
+            .disabledBackground(true)
+            .overlay {
+                // 다른 입력칸과 같은 글꼴 (고정폭 설정을 따른다). "99+"는 칸에 맞춰 줄어든다
+                Text(count > 99 ? "99+" : String(count))
+                    .font(AppSettings.fieldFont(monospaced: monospacedNames))
+                    .foregroundStyle(count == 0 ? Color.orange : Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
             .help(help)
     }
 
@@ -322,7 +349,7 @@ struct TokenGridEditor: View {
         let kind = tokens[slot].kind
         switch field.column {
         case 0: return kind != .none
-        case 1: return kind != .none && kind != .removeExtension
+        case 1: return kind != .none && kind != .removeExtension && kind != .addExtension
         default: return kind.isNamePart && usesSeparator && !isOmittedSeparator(slot)
         }
     }
@@ -343,6 +370,7 @@ struct TokenGridEditor: View {
         case .number: "Start number. Digits follow its length, e.g. 0001. Negative is allowed, e.g. -01"
         case .regex: "Extract from original name. First capture group, or whole match"
         case .changeExtension: "Extension to change, without dot (exact match, case-sensitive), e.g. jpeg. Order is ignored. \(Self.singlePassNote)"
+        case .addExtension: "Extension to add to files without one, without dot, e.g. jpg: IMG_sample → IMG_sample.jpg. Order is ignored. \(Self.singlePassNote)"
         case .removeExtension: "Extension to remove, without dot (exact match, case-sensitive), e.g. bak: a.docx.bak → a.docx, or html for extensionless server files. Order is ignored. \(Self.singlePassNote)"
         }
     }
@@ -354,12 +382,26 @@ struct TokenGridEditor: View {
         case .number: "Step. Empty means 1, negative counts down. 0 isn't allowed"
         case .regex: "Pad on the left to this length with its character, e.g. 0000 → 0012. Empty: no padding"
         case .changeExtension: "New extension, without dot, e.g. jpg"
-        case .removeExtension: "Not used"
+        case .removeExtension, .addExtension: "Not used"
         }
     }
 }
 
 private extension View {
+    /// 입력칸에 파일·폴더를 놓으면 경로를 글자로 넣지 않고 onDrop으로 넘긴다.
+    /// SwiftUI의 놓기 처리가 먼저 받으면 그대로 넘기고, 입력칸이 먼저 경로를 넣었으면 되돌린 뒤 넘긴다
+    func fileDropGuard(_ text: Binding<String>, onDrop: (([URL]) -> Void)?) -> some View {
+        dropDestination(for: URL.self) { urls, _ in
+            onDrop?(urls)
+            return true
+        }
+        .onChange(of: text.wrappedValue) { old, new in
+            guard let url = BrowserModel.droppedPath(old: old, new: new) else { return }
+            text.wrappedValue = old
+            onDrop?([url])
+        }
+    }
+
     /// 비활성 입력칸을 회색 배경으로 덮어 활성 칸과 구분한다
     func disabledBackground(_ isDisabled: Bool) -> some View {
         overlay {

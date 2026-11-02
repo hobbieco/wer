@@ -22,9 +22,11 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
         case changeExtension = "extension"
         /// 확장자 지우기(Remove Ext). value는 대상 확장자(대소문자 구분). option·구분자는 쓰지 않는다
         case removeExtension
+        /// 확장자 붙이기(Add Ext). 확장자가 없는 파일에만 value를 붙인다 (서버에서 받은 확장자 없는 파일 등). option·구분자는 쓰지 않는다
+        case addExtension
 
-        /// 확장자 규칙인지 (Change Ext·Remove Ext)
-        var isExtensionRule: Bool { self == .changeExtension || self == .removeExtension }
+        /// 확장자 규칙인지 (Change Ext·Remove Ext·Add Ext)
+        var isExtensionRule: Bool { self == .changeExtension || self == .removeExtension || self == .addExtension }
 
         /// 새 이름 본문을 이루는 조각인지 (None·확장자 규칙 제외)
         var isNamePart: Bool { self != .none && !isExtensionRule }
@@ -41,7 +43,7 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
     func resolve(stem: String, index: Int) -> String? {
         guard validationError == nil, optionError == nil else { return nil }
         switch kind {
-        case .none, .changeExtension, .removeExtension:
+        case .none, .changeExtension, .removeExtension, .addExtension:
             return nil
         case .text:
             return value + option
@@ -66,6 +68,15 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
     var needsValue: Bool { validationError == Self.emptyValueMessage }
     var needsOption: Bool { optionError == Self.emptyValueMessage }
     var needsInput: Bool { needsValue || needsOption }
+
+    /// 확장자 규칙이 고르는 파일의 확장자(extensionKey). Add Ext는 확장자가 없는 파일이라 빈 문자열. 확장자 규칙이 아니면 nil
+    var extensionTarget: String? {
+        switch kind {
+        case .changeExtension, .removeExtension: RenameSettings.extensionKey(value)
+        case .addExtension: ""
+        default: nil
+        }
+    }
 
     /// 실행은 되지만 확인이 필요한 상태(주황). Apply·저장을 막지 않는다.
     /// Change Ext의 대상과 바꿀 확장자가 같으면(완전 일치) 아무것도 바뀌지 않는다
@@ -105,7 +116,7 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
         case .text:
             if value.isEmpty { return option.isEmpty ? Self.emptyValueMessage : nil }
             return Self.containsInvalidFileNameCharacter(value) ? Self.invalidCharacterMessage : nil
-        case .changeExtension, .removeExtension:
+        case .changeExtension, .removeExtension, .addExtension:
             return value.isEmpty ? Self.emptyValueMessage : Self.extensionError(value)
         case _ where value.isEmpty:
             return Self.emptyValueMessage
@@ -130,7 +141,7 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
         if kind == .changeExtension, option.isEmpty { return Self.emptyValueMessage }
         guard !option.isEmpty else { return nil }
         switch kind {
-        case .none, .removeExtension:
+        case .none, .removeExtension, .addExtension:
             return nil
         case .text:
             return Self.containsInvalidFileNameCharacter(option) ? Self.invalidCharacterMessage : nil
@@ -236,23 +247,23 @@ nonisolated struct RenameSettings: Equatable {
         ext.precomposedStringWithCanonicalMapping
     }
 
-    /// 파일 이름들의 확장자별 개수 (extensionKey 기준). 확장자 규칙 줄의 일치 파일 수 표시에 쓴다
+    /// 파일 이름들의 확장자별 개수 (extensionKey 기준, 확장자가 없으면 ""). 확장자 규칙 줄의 일치 파일 수 표시에 쓴다
     static func extensionCounts(of names: [String]) -> [String: Int] {
         var counts: [String: Int] = [:]
         for name in names {
-            let ext = (name as NSString).pathExtension
-            if !ext.isEmpty { counts[extensionKey(ext), default: 0] += 1 }
+            counts[extensionKey((name as NSString).pathExtension), default: 0] += 1
         }
         return counts
     }
 
-    /// 대상 확장자가 다른 확장자 규칙과 겹치는 칸 → 겹치는 다른 칸(0부터, 첫 번째). 대소문자 구분, 종류 무관
+    /// 고르는 파일이 다른 확장자 규칙과 겹치는 칸 → 겹치는 다른 칸(0부터, 첫 번째). 대소문자 구분, 종류 무관.
+    /// Add Ext는 확장자가 없는 파일을 고르므로 Add Ext끼리 겹친다
     static func extensionConflicts(in tokens: [NameToken]) -> [Int: Int] {
         var result: [Int: Int] = [:]
-        for (slot, token) in tokens.enumerated() where token.kind.isExtensionRule && !token.value.isEmpty {
+        for (slot, token) in tokens.enumerated() where !token.value.isEmpty {
+            guard let target = token.extensionTarget else { continue }
             if let other = tokens.indices.first(where: {
-                $0 != slot && tokens[$0].kind.isExtensionRule
-                    && extensionKey(tokens[$0].value) == extensionKey(token.value)
+                $0 != slot && !tokens[$0].value.isEmpty && tokens[$0].extensionTarget == target
             }) {
                 result[slot] = other
             }
@@ -261,7 +272,7 @@ nonisolated struct RenameSettings: Equatable {
     }
 
     static func conflictMessage(_ otherSlot: Int) -> String {
-        "Same extension as slot \(otherSlot + 1)"
+        "Same target as slot \(otherSlot + 1)"
     }
 
     var isValid: Bool { validationErrors.isEmpty }
@@ -302,11 +313,15 @@ nonisolated struct RenameSettings: Equatable {
     /// 새 확장자와, 그것을 정한 확장자 규칙의 칸 번호(맞는 규칙이 없으면 nil)
     func extensionChange(for name: String) -> (ext: String, slot: Int?) {
         let ext = (name as NSString).pathExtension
-        guard !ext.isEmpty, let slot = tokens.indices.first(where: {
-            tokens[$0].kind.isExtensionRule && tokens[$0].validationError == nil && tokens[$0].optionError == nil
-                && Self.extensionKey(tokens[$0].value) == Self.extensionKey(ext)
+        guard let slot = tokens.indices.first(where: {
+            tokens[$0].validationError == nil && tokens[$0].optionError == nil
+                && tokens[$0].extensionTarget == Self.extensionKey(ext)
         }) else { return (ext, nil) }
-        return (tokens[slot].kind == .removeExtension ? "" : tokens[slot].option, slot)
+        switch tokens[slot].kind {
+        case .removeExtension: return ("", slot)
+        case .addExtension: return (tokens[slot].value, slot)
+        default: return (tokens[slot].option, slot)
+        }
     }
 
     func newName(for name: String, index: Int) -> String? {

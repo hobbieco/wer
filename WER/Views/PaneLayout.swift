@@ -5,14 +5,16 @@
 
 import SwiftUI
 
-/// Select | Order | Rename 칸 너비 계산. 비율로 저장해 창 크기가 바뀌어도 비율을 유지하고, 칸마다 최소 폭을 지킨다.
+/// Select | Order | Rename 칸 너비 계산. Select와 Rename 폭을 pt로 저장하고 Order가 나머지를 갖는다.
+/// 비율로 저장하면 끄기를 마칠 때 비율로 바꾸는 계산 때문에 경계가 튀어서, 폭을 그대로 쓴다. 칸마다 최소 폭을 지킨다.
 struct PaneLayout {
-    static let defaultSelectFraction = 0.25
-    static let defaultOrderFraction = 0.5
+    static let defaultSelectWidth: Double = 300
+    static let defaultRenameWidth: Double = 440
 
     static let minSelect: CGFloat = 280
     static let minOrder: CGFloat = 480
-    static let minRename: CGFloat = 360
+    // 입력칸이 고정폭 글꼴이라 조금 넓게
+    static let minRename: CGFloat = 420
     static let collapsedWidth: CGFloat = 28
     /// 칸 사이 경계선 2개의 폭
     static let handlesWidth: CGFloat = 2
@@ -33,18 +35,14 @@ struct PaneLayout {
         max(total - handlesWidth, 0)
     }
 
-    static func widths(total: CGFloat, selectFraction: Double, orderFraction: Double, isSelectCollapsed: Bool) -> Widths {
+    /// 저장한 Select·Rename 폭으로 세 칸 폭을 정한다. 창이 좁아 다 못 들어가면 Rename, Select 순으로 줄인다
+    static func widths(total: CGFloat, selectWidth: CGFloat, renameWidth: CGFloat, isSelectCollapsed: Bool) -> Widths {
         let available = available(total: total)
-        if isSelectCollapsed {
-            // Select 몫은 Order와 Rename이 원래 비율대로 나눠 쓴다
-            let rest = available - collapsedWidth
-            let orderShare = orderFraction / max(1 - selectFraction, 0.01)
-            let order = clamp(rest * orderShare, minOrder, rest - minRename)
-            return Widths(select: collapsedWidth, order: order, rename: rest - order)
-        }
-        let select = clamp(available * selectFraction, minSelect, available - minOrder - minRename)
-        let order = clamp(available * orderFraction, minOrder, available - select - minRename)
-        return Widths(select: select, order: order, rename: available - select - order)
+        let select = isSelectCollapsed
+            ? collapsedWidth
+            : clamp(selectWidth, minSelect, available - minOrder - minRename)
+        let rename = clamp(renameWidth, minRename, available - select - minOrder)
+        return Widths(select: select, order: max(available - select - rename, 0), rename: rename)
     }
 
     private static func clamp(_ value: CGFloat, _ lower: CGFloat, _ upper: CGFloat) -> CGFloat {

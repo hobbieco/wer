@@ -10,10 +10,12 @@ struct ContentView: View {
     @State private var model = BrowserModel()
     @AppStorage(AppSettings.sortFoldersFirstKey) private var sortsFoldersFirst = true
     @SceneStorage("isSelectCollapsed") private var isSelectCollapsed = false
-    // 칸 너비 비율. 처음엔 1 : 2 : 1이고 경계를 끌어 바꾼다 (Rename은 나머지)
-    @SceneStorage("selectFraction") private var selectFraction = PaneLayout.defaultSelectFraction
-    @SceneStorage("orderFraction") private var orderFraction = PaneLayout.defaultOrderFraction
+    // Select와 Rename 칸 폭(pt). Order는 나머지를 갖고, 창 크기를 바꾸면 Order가 늘고 준다
+    @SceneStorage("selectWidth") private var selectWidth = PaneLayout.defaultSelectWidth
+    @SceneStorage("renameWidth") private var renameWidth = PaneLayout.defaultRenameWidth
     @State private var dragStart: PaneLayout.Widths?
+    /// 경계를 끌기 시작할 때의 창 폭. 다른 칸이 최소라 막히면 창을 넓히는 기준
+    @State private var dragStartWindowWidth: CGFloat?
     // 메뉴로 넘기는 동작의 비교용 ID (창마다 고정)
     @State private var resetActionID = UUID()
 
@@ -21,7 +23,9 @@ struct ContentView: View {
         VStack(spacing: 0) {
             // ② 경로 정보, 선택 파일 수
             HStack {
-                PathBar(url: model.folder) { model.open($0) }
+                // Finder 사이드바처럼 자주 가는 곳 (즐겨찾기, iCloud, 볼륨, 최근 폴더)
+                PlacesButton(current: model.folder) { model.requestNavigation(to: [$0]) }
+                PathBar(url: model.folder) { model.requestNavigation(to: [$0]) }
                 Spacer()
                 Text(model.countText)
                     .foregroundStyle(.secondary)
@@ -48,12 +52,12 @@ struct ContentView: View {
                     if isSelectCollapsed {
                         Divider()
                     } else {
-                        SplitHandle { dragSelectOrder(by: $0, total: total) } onEnded: { dragStart = nil }
+                        SplitHandle { dragSelectOrder(by: $0, total: total) } onEnded: { endDrag() }
                     }
                     OrderPanel(model: model)
                         .frame(width: widths.order)
                         .clipped()
-                    SplitHandle { dragOrderRename(by: $0, total: total) } onEnded: { dragStart = nil }
+                    SplitHandle { dragOrderRename(by: $0, total: total) } onEnded: { endDrag() }
                     RenamePanel(model: model)
                         .frame(width: widths.rename)
                         .clipped()
@@ -115,6 +119,10 @@ struct ContentView: View {
                 BrowserModel.active = nil
             }
         }
+        // Finder에서 폴더·파일을 창 어디에 놓아도 그 위치로 이동한다 (Select·Order·Copy To는 각자 먼저 처리한다)
+        .dropDestination(for: URL.self) { urls, _ in
+            model.dropFromOutside(urls, addsToOrder: false)
+        }
         .navigationTitle(model.folder.lastPathComponent)
         // open -a WER <폴더|파일>: SwiftUI가 새 창을 만들어 넘겨준다. 파일이면 상위 폴더를 열고 그 파일을 선택한다
         .onOpenURL { url in
@@ -139,6 +147,17 @@ struct ContentView: View {
                     : "\(journal.entries.count) files were being renamed. Some may have temporary names (.wer-tmp-…).")
             }
         }
+        // Finder에서 다른 폴더의 항목을 놓았는데 Order에 파일이 있으면 비워도 되는지 묻는다
+        .alert(
+            "Go to “\(model.pendingNavigation?.folder.lastPathComponent ?? "")”?",
+            isPresented: Binding { model.pendingNavigation != nil } set: { if !$0 { model.pendingNavigation = nil } },
+            presenting: model.pendingNavigation
+        ) { drop in
+            Button("Go") { model.performNavigation(drop) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Order has \(model.orderedFiles.count) files. Going to another folder clears Order (files are not changed).")
+        }
         // 실행 확인 (항상)
         .alert(
             runAlertTitle,
@@ -153,7 +172,7 @@ struct ContentView: View {
             Text(runAlertMessage(request))
         }
         .sheet(isPresented: $model.isGoToFolderPresented) {
-            GoToFolderSheet(initialFolder: model.goToFolderStart) { model.go(to: $0) }
+            GoToFolderSheet(initialFolder: model.goToFolderStart) { model.requestGo(to: $0) }
         }
         .sheet(isPresented: $model.isCopyFolderPresented) {
             GoToFolderSheet(
@@ -165,44 +184,63 @@ struct ContentView: View {
         }
         .focusedSceneValue(\.browserModel, model)
         .focusedSceneValue(\.resetPaneLayout, SceneAction(id: resetActionID) {
-            selectFraction = PaneLayout.defaultSelectFraction
-            orderFraction = PaneLayout.defaultOrderFraction
+            selectWidth = PaneLayout.defaultSelectWidth
+            renameWidth = PaneLayout.defaultRenameWidth
         })
     }
 
     private func paneWidths(total: CGFloat) -> PaneLayout.Widths {
         PaneLayout.widths(
             total: total,
-            selectFraction: selectFraction,
-            orderFraction: orderFraction,
+            selectWidth: selectWidth,
+            renameWidth: renameWidth,
             isSelectCollapsed: isSelectCollapsed
         )
     }
 
-    /// Select | Order 경계를 끈다. Rename 폭은 그대로
-    private func dragSelectOrder(by translation: CGFloat, total: CGFloat) {
-        let start = dragStart ?? paneWidths(total: total)
-        dragStart = start
-        let available = PaneLayout.available(total: total)
-        let pair = start.select + start.order
-        let select = min(max(start.select + translation, PaneLayout.minSelect), pair - PaneLayout.minOrder)
-        selectFraction = select / available
-        orderFraction = (pair - select) / available
+    private func beginDrag(total: CGFloat) {
+        guard dragStart == nil else { return }
+        dragStart = paneWidths(total: total)
+        dragStartWindowWidth = NSApp.keyWindow?.frame.width
     }
 
-    /// Order | Rename 경계를 끈다. Select 폭은 그대로
-    private func dragOrderRename(by translation: CGFloat, total: CGFloat) {
-        let start = dragStart ?? paneWidths(total: total)
-        dragStart = start
-        let pair = start.order + start.rename
-        let order = min(max(start.order + translation, PaneLayout.minOrder), pair - PaneLayout.minRename)
-        if isSelectCollapsed {
-            // 접힌 동안은 Order가 차지하는 몫을 펼쳤을 때의 비율로 환산해 저장한다
-            let rest = PaneLayout.available(total: total) - PaneLayout.collapsedWidth
-            orderFraction = order / rest * (1 - selectFraction)
-        } else {
-            orderFraction = order / PaneLayout.available(total: total)
+    private func endDrag() {
+        dragStart = nil
+        dragStartWindowWidth = nil
+    }
+
+    /// 경계를 끌다가 다른 칸이 최소라 막히면 모자란 만큼 창을 오른쪽으로 넓힌다 (화면 끝까지).
+    /// 다시 되돌려 끌면 끌기 시작할 때의 창 폭까지 줄어든다. 실제로 넓힌 폭을 돌려준다
+    private func growWindow(by overflow: CGFloat) -> CGFloat {
+        guard let window = NSApp.keyWindow, let startWidth = dragStartWindowWidth else { return 0 }
+        let maxWidth = (window.screen?.visibleFrame.maxX ?? .greatestFiniteMagnitude) - window.frame.minX
+        let target = max(min(startWidth + overflow, maxWidth), startWidth)
+        if abs(window.frame.width - target) > 0.5 {
+            var frame = window.frame
+            frame.size.width = target
+            window.setFrame(frame, display: true)
         }
+        return target - startWidth
+    }
+
+    /// Select | Order 경계를 끈다. Rename 폭은 그대로. Order가 최소면 창을 넓힌다 (Order는 나머지라 저절로 맞는다)
+    private func dragSelectOrder(by translation: CGFloat, total: CGFloat) {
+        beginDrag(total: total)
+        guard let start = dragStart else { return }
+        let pair = start.select + start.order
+        let desired = max(start.select + translation, PaneLayout.minSelect)
+        let grown = growWindow(by: max(0, desired - (pair - PaneLayout.minOrder)))
+        selectWidth = min(desired, pair + grown - PaneLayout.minOrder)
+    }
+
+    /// Order | Rename 경계를 끈다. Select 폭은 그대로. Rename이 최소면 창을 넓혀 Order를 키운다
+    private func dragOrderRename(by translation: CGFloat, total: CGFloat) {
+        beginDrag(total: total)
+        guard let start = dragStart else { return }
+        let pair = start.order + start.rename
+        let desiredRename = start.rename - translation
+        _ = growWindow(by: max(0, PaneLayout.minRename - desiredRename))
+        renameWidth = min(max(desiredRename, PaneLayout.minRename), pair - PaneLayout.minOrder)
     }
 }
 
@@ -230,8 +268,25 @@ extension ContentView {
     @ViewBuilder
     private var statusMessage: some View {
         if let loadError = model.loadError {
-            Text(loadError)
-                .foregroundStyle(.red)
+            HStack(spacing: 8) {
+                if model.isFolderMissing {
+                    // 폴더가 없어졌으면 허용이 아니라 상위 폴더로 갈 수 있게 한다
+                    Text("Folder not found: \(model.folder.lastPathComponent)")
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                    Button("Go to Enclosing Folder") { model.goToNearestExistingFolder() }
+                        .controlSize(.small)
+                        .help("Go to the nearest folder above that still exists")
+                } else {
+                    Text(loadError)
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                    // 클라우드 저장소처럼 허용 창 없이 막히는 폴더는 열기 창에서 직접 고르면 열린다
+                    Button("Allow Access…") { model.requestAccessToCurrentFolder() }
+                        .controlSize(.small)
+                        .help("Choose this folder in the Open dialog to give WER access")
+                }
+            }
         } else if !conflictText.isEmpty || !noMatchText.isEmpty {
             HStack(spacing: 8) {
                 if !conflictText.isEmpty {

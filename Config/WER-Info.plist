@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  빌드 설정의 INFOPLIST_KEY_* 로 넣을 수 없는 항목. 생성되는 Info.plist에 합쳐진다.
+  (네트워크·외장 볼륨 접근 설명은 빌드 설정에 있다)
+  Dock 아이콘에 폴더·파일을 놓으면 열 수 있도록 받는 형식을 선언한다 (open -a WER 와 같은 경로로 처리).
+  Alternate라서 Finder에서 더블클릭할 때의 기본 앱은 바뀌지 않는다.
+-->
+<plist version="1.0">
+<dict>
+	<!-- 보호된 위치에 처음 접근할 때 macOS가 보여주는 허용 창의 설명. 없으면 창 없이 거부될 수 있다 -->
+	<key>NSFileProviderDomainUsageDescription</key>
+	<string>WER needs access to cloud storage folders (such as Synology Drive or Dropbox) to list and rename files you choose there.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>WER needs access to the Desktop folder to list and rename files you choose there.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>WER needs access to the Documents folder to list and rename files you choose there.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>WER needs access to the Downloads folder to list and rename files you choose there.</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Folder</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.folder</string>
+				<string>public.volume</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>File</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

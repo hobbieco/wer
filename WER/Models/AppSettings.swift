@@ -60,6 +60,27 @@ nonisolated enum AppSettings {
     static var removesCopiesToTrash: Bool {
         UserDefaults.standard.object(forKey: removeCopiesToTrashKey) as? Bool ?? false
     }
+    /// Select·Order 목록의 글자 크기. Small이 예전 크기
+    enum ListTextSize: String, CaseIterable {
+        case small, medium, large
+
+        var title: String { rawValue.capitalized }
+        var pointSize: CGFloat {
+            switch self {
+            case .small: 13
+            case .medium: 15
+            case .large: 17
+            }
+        }
+        /// 파일 아이콘 크기
+        var iconSize: CGFloat { pointSize + 3 }
+    }
+
+    static let listTextSizeKey = "settings.listTextSize"
+    /// Select·Order의 파일 이름(원래 이름, 새 이름)을 고정폭 글꼴로 보여줄지 (숫자 자리가 줄마다 맞는다). 기본은 켬.
+    /// 키 이름은 처음(New Name만 적용하던 때)과 같게 유지한다
+    static let monospacedNamesKey = "settings.monospacedNewNames"
+
     /// Select 목록에서 폴더를 파일보다 먼저 보여줄지. 기본은 폴더 먼저
     static let sortFoldersFirstKey = "settings.sortFoldersFirst"
 
@@ -172,7 +193,7 @@ nonisolated struct RenameDefaults: Equatable, Codable {
     /// 첫 번째 칸 값
     func value(for kind: NameToken.Kind) -> String {
         switch kind {
-        case .none, .changeExtension, .removeExtension: ""
+        case .none, .changeExtension, .removeExtension, .addExtension: ""
         case .text: text
         case .number: number
         case .regex: regex
@@ -182,7 +203,7 @@ nonisolated struct RenameDefaults: Equatable, Codable {
     /// 두 번째 칸 값 (Text 뒤 문자열, Number 증가 폭, Regex 채우기, 바꿀 확장자)
     func option(for kind: NameToken.Kind) -> String {
         switch kind {
-        case .none, .changeExtension, .removeExtension: ""
+        case .none, .changeExtension, .removeExtension, .addExtension: ""
         case .text: textSuffix
         case .number: numberStep
         case .regex: regexPad

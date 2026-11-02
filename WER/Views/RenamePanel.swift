@@ -27,7 +27,8 @@ struct RenamePanel: View {
                 onFocusChange: { model.setFocus(.rename, $0) },
                 kindMenuRequest: model.kindMenuRequest,
                 focusRequest: model.focusRequest?.pane == .rename ? model.focusRequest?.id : nil,
-                extensionCounts: RenameSettings.extensionCounts(of: model.orderedFiles.map(\.name))
+                extensionCounts: RenameSettings.extensionCounts(of: model.orderedFiles.map(\.name)),
+                onFileDrop: { model.dropFromOutside($0, addsToOrder: false) }
             )
 
             HStack {
@@ -44,13 +45,21 @@ struct RenamePanel: View {
             }
 
             HStack {
-                Toggle("Copy", isOn: $model.renameSettings.isCopy)
-                    .toggleStyle(.checkbox)
-                Button { model.isCopyFolderPresented = true } label: {
-                    Label("Copy To…", systemImage: "folder")
-                        .frame(width: actionButtonWidth)
+                // Finder에서 폴더를 놓으면 복사 위치로 지정하고 Copy를 켠다
+                HStack {
+                    Toggle("Copy", isOn: $model.renameSettings.isCopy)
+                        .toggleStyle(.checkbox)
+                    Button { model.isCopyFolderPresented = true } label: {
+                        Label("Copy To…", systemImage: "folder")
+                            .frame(width: actionButtonWidth)
+                    }
+                    .disabled(!model.renameSettings.isCopy)
                 }
-                .disabled(!model.renameSettings.isCopy)
+                .contentShape(Rectangle())
+                .dropDestination(for: URL.self) { urls, _ in
+                    _ = model.dropCopyFolder(urls)
+                }
+                .help("Drop a folder here to copy renamed files into it")
                 Spacer()
                 // 확인 창을 거쳐 실행한다
                 Button { model.requestRun() } label: {
