@@ -193,7 +193,7 @@ final class BrowserModel {
     private(set) var renameHistory: [RenameHistoryEntry] = []
     static let renameHistoryLimit = 20
 
-    /// settings·presetID는 Back했을 때 다섯 칸에 돌려놓을 규칙과 프리셋. 기본은 지금 다섯 칸
+    /// settings·presetID는 Back했을 때 여섯 칸에 돌려놓을 규칙과 프리셋. 기본은 지금 여섯 칸
     private func pushHistory(settings: RenameSettings? = nil, presetID: RenamePreset.ID?? = nil) {
         renameHistory.append(RenameHistoryEntry(
             settings: settings ?? renameSettings,
@@ -208,7 +208,7 @@ final class BrowserModel {
 
     /// 마지막으로 불러온(또는 저장한) 프리셋
     private(set) var loadedPresetID: RenamePreset.ID?
-    /// 지금 적용된 규칙을 Apply할 때 불러와 있던 프리셋 (Back으로 다섯 칸을 되돌릴 때 함께 돌려놓는다)
+    /// 지금 적용된 규칙을 Apply할 때 불러와 있던 프리셋 (Back으로 여섯 칸을 되돌릴 때 함께 돌려놓는다)
     private var appliedPresetID: RenamePreset.ID?
 
     var loadedPreset: RenamePreset? { PresetStore.shared.preset(loadedPresetID) }
@@ -219,7 +219,7 @@ final class BrowserModel {
         return !loadedPreset.matches(renameSettings)
     }
 
-    /// 프리셋을 다섯 칸에 불러온다. 새 이름은 Apply를 눌러야 바뀐다. Back으로 되돌릴 수 있다
+    /// 프리셋을 여섯 칸에 불러온다. 새 이름은 Apply를 눌러야 바뀐다. Back으로 되돌릴 수 있다
     func loadPreset(_ preset: RenamePreset) {
         pushHistory()
         preset.apply(to: &renameSettings)
@@ -264,7 +264,7 @@ final class BrowserModel {
             && renameSettings.isValid
     }
 
-    /// ⌘1~5로 칸 종류 드롭다운을 열어 달라는 요청. Rename 칸의 TokenGridEditor가 받아 처리한다
+    /// ⌘1~6로 칸 종류 드롭다운을 열어 달라는 요청. Rename 칸의 TokenGridEditor가 받아 처리한다
     struct KindMenuRequest: Equatable {
         let id = UUID()
         let slot: Int
@@ -302,7 +302,7 @@ final class BrowserModel {
 
     func applyRenameSettings() {
         guard renameSettings.isValid else { return }
-        // Apply 직전 다섯 칸은 지금 적용하는 규칙과 같아서, Back하면 이전에 적용했던 규칙을 다섯 칸에 돌려놓는다
+        // Apply 직전 여섯 칸은 지금 적용하는 규칙과 같아서, Back하면 이전에 적용했던 규칙을 여섯 칸에 돌려놓는다
         if let appliedSettings {
             pushHistory(settings: appliedSettings, presetID: appliedPresetID)
         } else {
@@ -861,7 +861,10 @@ extension BrowserModel {
         var warnings: [String] = []
         if !regexMisses.isEmpty { warnings.append("\(regexMisses.count) files: regex didn't match") }
         if !nameIssues.warnings.isEmpty { warnings.append("\(nameIssues.warnings.count) files: name starts with \".\" (hidden)") }
-        runRequest = RunRequest(plan: makePlan(), warnings: warnings)
+        let plan = makePlan()
+        let extensionChanges = plan.items.filter { $0.source.pathExtension != $0.destination.pathExtension }.count
+        if extensionChanges > 0 { warnings.append("\(extensionChanges) files: extension will change") }
+        runRequest = RunRequest(plan: plan, warnings: warnings)
     }
 
     /// 확인 창에서 실행을 누르면 호출한다

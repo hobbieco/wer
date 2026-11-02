@@ -77,50 +77,48 @@ nonisolated enum AppSettings {
     /// 미리보기에서 동영상·오디오를 바로 재생할지. 기본은 재생하지 않음
     static let previewAutoplaysMediaKey = "settings.previewAutoplaysMedia"
     static let builtInCopyFolderName = "wer-rename"
-    /// 종류를 고를 때 입력칸에 채울 값 (모든 프리셋 공통). 키 이름은 예전 버전과 같게 유지한다
-    static let fieldTextKey = "settings.emptyText"
-    static let fieldNumberKey = "settings.emptyNumber"
-    static let fieldRegexKey = "settings.emptyRegex"
-    static let fieldNumberStepKey = "settings.fieldNumberStep"
-    static let fieldRegexPadKey = "settings.fieldRegexPad"
+    /// 예전 설정 > General > Default Field Values (종류를 고를 때 채우던 값). 지금은 빈 칸으로 시작해서 쓰지 않고,
+    /// 예전 프리셋의 빈 칸을 한 번 채울 때만 읽는다
+    enum LegacyField {
+        static let text = "settings.emptyText"
+        static let number = "settings.emptyNumber"
+        static let regex = "settings.emptyRegex"
+        static let numberStep = "settings.fieldNumberStep"
+        static let regexPad = "settings.fieldRegexPad"
+        static let all = [text, number, regex, numberStep, regexPad]
+    }
 
-    /// 종류를 고를 때 채울 값. 비었거나 형식이 잘못된 항목은 앱 기본값을 쓴다
-    static var fieldDefaults: RenameDefaults {
+    /// 예전 Default Field Values. 비었거나 형식이 잘못된 항목은 예전 앱 기본값을 쓴다
+    static var legacyFieldDefaults: RenameDefaults {
         let defaults = UserDefaults.standard
-        let builtIn = RenameDefaults.builtIn
-        var result = builtIn
-        if let text = defaults.string(forKey: fieldTextKey), NameToken(kind: .text, value: text).validationError == nil {
+        var result = RenameDefaults(text: "wer-rename", number: "0001", numberStep: "1", regex: "\\d+", regexPad: "0000")
+        if let text = defaults.string(forKey: LegacyField.text) ?? defaults.string(forKey: Legacy.textDefault),
+           NameToken(kind: .text, value: text).validationError == nil {
             result.text = text
         }
-        if var number = defaults.string(forKey: fieldNumberKey) {
-            // 예전 형식 "0001 step 1"이면 시작값만 쓴다
-            if number.contains(where: \.isWhitespace) { number = String(number.prefix { !$0.isWhitespace }) }
+        if var number = defaults.string(forKey: LegacyField.number) ?? defaults.string(forKey: Legacy.numberDefault) {
+            // 예전 형식 "0001 step 1"이면 시작값과 증가 폭으로 나눈다
+            if let legacy = NameToken.parseNumber(number), number.contains(where: \.isWhitespace) {
+                result.numberStep = String(legacy.step)
+                number = String(number.prefix { !$0.isWhitespace })
+            }
             if NameToken(kind: .number, value: number).validationError == nil { result.number = number }
         }
-        if let step = defaults.string(forKey: fieldNumberStepKey),
+        if let step = defaults.string(forKey: LegacyField.numberStep),
            NameToken(kind: .number, value: "1", option: step).optionError == nil {
             result.numberStep = step
         }
-        if let regex = defaults.string(forKey: fieldRegexKey), NameToken(kind: .regex, value: regex).validationError == nil {
+        if let regex = defaults.string(forKey: LegacyField.regex), NameToken(kind: .regex, value: regex).validationError == nil {
             result.regex = regex
         }
-        if let pad = defaults.string(forKey: fieldRegexPadKey),
+        if let pad = defaults.string(forKey: LegacyField.regexPad),
            NameToken(kind: .regex, value: ".", option: pad).optionError == nil {
             result.regexPad = pad
         }
         return result
     }
 
-    static func setFieldDefaults(_ values: RenameDefaults) {
-        let defaults = UserDefaults.standard
-        defaults.set(values.text, forKey: fieldTextKey)
-        defaults.set(values.number, forKey: fieldNumberKey)
-        defaults.set(values.regex, forKey: fieldRegexKey)
-        defaults.set(values.numberStep, forKey: fieldNumberStepKey)
-        defaults.set(values.regexPad, forKey: fieldRegexPadKey)
-    }
-
-    /// 예전 설정 > Rename 탭의 값. 처음 실행할 때 옮기고 지운다 (Text·Number 값은 Default Field Values, 구분자는 Default 프리셋)
+    /// 예전 설정 > Rename 탭의 값. 처음 실행할 때 옮기고 지운다 (구분자는 Default 프리셋, Text·Number 값은 예전 프리셋의 빈 칸)
     enum Legacy {
         static let textDefault = "settings.textDefault"
         static let numberDefault = "settings.numberDefault"
@@ -158,38 +156,44 @@ nonisolated enum AppSettings {
     }
 }
 
-/// Text·Number·Regex 값 묶음. 종류를 고를 때 채울 값(설정 > General)과 입력칸 형식 예시로 쓴다
+/// Text·Number·Regex 값 묶음. 내장 Default 프리셋의 값과, 예전 버전 프리셋의 빈 칸을 채울 때 쓴다
 nonisolated struct RenameDefaults: Equatable, Codable {
     var text: String
+    /// Text 두 번째 칸 (첫 칸 뒤에 붙는다)
+    var textSuffix = ""
     var number: String
     var numberStep = "1"
     var regex: String
     var regexPad = ""
 
-    static let builtIn = RenameDefaults(text: "wer-rename", number: "0001", numberStep: "1", regex: "\\d+", regexPad: "0000")
+    static let builtIn = RenameDefaults(
+        text: "wer-", textSuffix: "rename", number: "0001", numberStep: "1", regex: "\\d+", regexPad: "0000")
 
     /// 첫 번째 칸 값
     func value(for kind: NameToken.Kind) -> String {
         switch kind {
-        case .none: ""
+        case .none, .changeExtension, .removeExtension: ""
         case .text: text
         case .number: number
         case .regex: regex
         }
     }
 
-    /// 두 번째 칸 값 (Number 증가 폭, Regex 채우기)
+    /// 두 번째 칸 값 (Text 뒤 문자열, Number 증가 폭, Regex 채우기, 바꿀 확장자)
     func option(for kind: NameToken.Kind) -> String {
         switch kind {
-        case .none, .text: ""
+        case .none, .changeExtension, .removeExtension: ""
+        case .text: textSuffix
         case .number: numberStep
         case .regex: regexPad
         }
     }
 
     // 예전에 저장한 값에는 두 번째 칸이 없을 수 있다
-    init(text: String, number: String, numberStep: String = "1", regex: String, regexPad: String = "") {
+    init(
+        text: String, textSuffix: String = "", number: String, numberStep: String = "1", regex: String, regexPad: String = "") {
         self.text = text
+        self.textSuffix = textSuffix
         self.number = number
         self.numberStep = numberStep
         self.regex = regex
@@ -199,6 +203,7 @@ nonisolated struct RenameDefaults: Equatable, Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         text = try container.decode(String.self, forKey: .text)
+        textSuffix = try container.decodeIfPresent(String.self, forKey: .textSuffix) ?? ""
         number = try container.decode(String.self, forKey: .number)
         numberStep = try container.decodeIfPresent(String.self, forKey: .numberStep) ?? "1"
         regex = try container.decode(String.self, forKey: .regex)

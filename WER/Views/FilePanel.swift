@@ -536,7 +536,7 @@ extension View {
 
 /// 정규식 조각별 강조 색. 조각 번호(0~4) 순서
 enum RegexPalette {
-    static let colors: [Color] = [.orange, .green, .blue, .purple, .pink]
+    static let colors: [Color] = [.orange, .green, .blue, .purple, .pink, .teal]
 
     static func color(_ slot: Int) -> Color {
         colors[slot % colors.count]

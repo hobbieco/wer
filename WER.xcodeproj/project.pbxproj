@@ -6,6 +6,11 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		4FE5610C309759890084081B /* README.ko.md in Resources */ = {isa = PBXBuildFile; fileRef = 4FE5610B309759890084081B /* README.ko.md */; };
+		4FE5610D309759890084081B /* README.ko.md in Resources */ = {isa = PBXBuildFile; fileRef = 4FE5610B309759890084081B /* README.ko.md */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		4F78587B3095B6C600608227 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -21,6 +26,7 @@
 		4F78586D3095B6C500608227 /* WER.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WER.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4F78587A3095B6C600608227 /* WERTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WERTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4F9C0F1A3097000000A1B2C3 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Shared.xcconfig; path = Config/Shared.xcconfig; sourceTree = "<group>"; };
+		4FE5610B309759890084081B /* README.ko.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.ko.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -66,6 +72,7 @@
 		4F7858643095B6C500608227 = {
 			isa = PBXGroup;
 			children = (
+				4FE5610B309759890084081B /* README.ko.md */,
 				4F132B9A3096191500493E9E /* README.md */,
 				4F9C0F1A3097000000A1B2C3 /* Shared.xcconfig */,
 				4F78586F3095B6C500608227 /* WER */,
@@ -168,11 +175,13 @@
 		4F78586B3095B6C500608227 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				4FE5610D309759890084081B /* README.ko.md in Resources */,
 			);
 		};
 		4F7858783095B6C600608227 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				4FE5610C309759890084081B /* README.ko.md in Resources */,
 			);
 		};
 /* End PBXResourcesBuildPhase section */

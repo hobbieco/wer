@@ -7,7 +7,7 @@ import Foundation
 import Observation
 import SwiftUI
 
-/// 이름 규칙. 다섯 칸과 구분자 옵션을 담는다 (복사 설정과 빈 칸 값은 제외. 빈 칸 값은 전역 설정)
+/// 이름 규칙. 여섯 칸과 구분자 옵션을 담는다 (복사 설정은 제외)
 nonisolated struct RenamePreset: Identifiable, Codable, Equatable {
     static let defaultID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
@@ -16,6 +16,14 @@ nonisolated struct RenamePreset: Identifiable, Codable, Equatable {
     var tokens: [NameToken]
     var usesSeparator: Bool
     var omitsLastSeparator = true
+    /// 채워야 하는 빈 칸 번호(0부터). 메뉴·목록에 ⚠로 표시한다
+    var slotsNeedingInput: [Int] { tokens.indices.filter { tokens[$0].needsInput } }
+
+    /// 빈 칸 안내 문구. 빈 칸이 없으면 nil
+    var needsInputNote: String? {
+        slotsNeedingInput.isEmpty ? nil : "Needs input in slot " + slotsNeedingInput.map { String($0 + 1) }.joined(separator: ", ")
+    }
+
     /// 예전 버전에서 프리셋마다 가졌던 빈 칸 대체값. 읽기만 하고, 처음 실행할 때 빈 칸을 채운 뒤 버린다
     var legacyFallbacks: RenameDefaults?
 
@@ -45,7 +53,8 @@ nonisolated struct RenamePreset: Identifiable, Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
-        tokens = try container.decode([NameToken].self, forKey: .tokens)
+        // 칸 수가 다르게 저장된 프리셋(예전 5칸)은 지금 칸 수에 맞춘다
+        tokens = Self.fitted(try container.decode([NameToken].self, forKey: .tokens))
         usesSeparator = try container.decode(Bool.self, forKey: .usesSeparator)
         omitsLastSeparator = try container.decodeIfPresent(Bool.self, forKey: .omitsLastSeparator) ?? true
         legacyFallbacks = try container.decodeIfPresent(RenameDefaults.self, forKey: .legacyFallbacks)
@@ -60,16 +69,28 @@ nonisolated struct RenamePreset: Identifiable, Codable, Equatable {
         try container.encode(omitsLastSeparator, forKey: .omitsLastSeparator)
     }
 
-    /// 예시를 겸한 기본 규칙: [Text] [Regex] [Number] → wer-rename-1234-0001.jpg
+    /// 예시를 겸한 기본 규칙(시작 프리셋): [Text] [Regex] [Number] → wer-rename-1234-0001.jpg.
+    /// 확장자 규칙은 이름만 바꾸려는 파일의 확장자까지 바꾸지 않도록 Fix Extensions에 따로 둔다
     static var builtInDefault: RenamePreset {
         let values = RenameDefaults.builtIn
-        var tokens = [
-            NameToken(kind: .text, value: values.text),
+        let tokens = [
+            NameToken(kind: .text, value: values.text, option: values.textSuffix),
             NameToken(kind: .regex, value: values.regex, option: values.regexPad),
             NameToken(kind: .number, value: values.number, option: values.numberStep),
         ]
-        tokens += (tokens.count..<RenameSettings.tokenCount).map { _ in NameToken() }
-        return RenamePreset(id: defaultID, name: "Default", tokens: tokens, usesSeparator: true)
+        return RenamePreset(id: defaultID, name: "Default", tokens: fitted(tokens), usesSeparator: true)
+    }
+
+    static let fixExtensionsName = "Fix Extensions"
+
+    /// 확장자 규칙 예시 프리셋: [Change Ext] jpeg → jpg, [Remove Ext] bak. 이름은 그대로 두고 확장자만 바꾼다.
+    /// 일반 프리셋이라 이름을 바꾸거나 지울 수 있다
+    static var builtInFixExtensions: RenamePreset {
+        let tokens = [
+            NameToken(kind: .changeExtension, value: "jpeg", option: "jpg"),
+            NameToken(kind: .removeExtension, value: "bak"),
+        ]
+        return RenamePreset(name: fixExtensionsName, tokens: fitted(tokens), usesSeparator: true)
     }
 
     /// 목록에 보여줄 요약. 예: "Text trip · Number 001 · Regex (\d+)"
@@ -80,10 +101,14 @@ nonisolated struct RenamePreset: Identifiable, Codable, Equatable {
             case .text: "Text"
             case .number: "Number"
             case .regex: "Regex"
+            case .changeExtension: "Change Ext"
+            case .removeExtension: "Remove Ext"
             }
             let option = switch token.kind {
             case .number where !token.option.isEmpty: " step \(token.option)"
             case .regex where !token.option.isEmpty: " pad \(token.option)"
+            case .text: token.option
+            case .changeExtension: " → " + token.option
             default: ""
             }
             return token.value.isEmpty ? kind : "\(kind) \(token.value)\(option)"
@@ -91,11 +116,16 @@ nonisolated struct RenamePreset: Identifiable, Codable, Equatable {
         return parts.isEmpty ? "Empty" : parts.joined(separator: " · ")
     }
 
-    /// 이 프리셋을 Rename 칸 설정에 넣는다. 복사 설정은 건드리지 않는다
-    func apply(to settings: inout RenameSettings) {
+    /// 칸 수를 RenameSettings.tokenCount에 맞춘다. 모자라면 None 칸을 붙이고 넘치면 자른다
+    static func fitted(_ tokens: [NameToken]) -> [NameToken] {
         var filled = Array(tokens.prefix(RenameSettings.tokenCount))
         filled += (filled.count..<RenameSettings.tokenCount).map { _ in NameToken() }
-        settings.tokens = filled
+        return filled
+    }
+
+    /// 이 프리셋을 Rename 칸 설정에 넣는다. 복사 설정은 건드리지 않는다
+    func apply(to settings: inout RenameSettings) {
+        settings.tokens = Self.fitted(tokens)
         settings.usesSeparator = usesSeparator
         settings.omitsLastSeparator = omitsLastSeparator
     }
@@ -125,12 +155,70 @@ final class PresetStore {
 
     private(set) var presets: [RenamePreset] = []
 
+    /// 설정 > Presets의 예시 파일 이름 (프리셋 id별 sampleCount개). 이름 규칙이 아니라 프리셋과 따로 저장한다
+    private(set) var samples: [RenamePreset.ID: [String]] = [:]
+    private static let samplesKey = "settings.presetSamples"
+    static let sampleCount = 3
+
     private init() {
         if let data = UserDefaults.standard.data(forKey: Self.key),
            let saved = try? JSONDecoder().decode([RenamePreset].self, from: data) {
             presets = saved
         }
+        if let data = UserDefaults.standard.data(forKey: Self.samplesKey),
+           let saved = try? JSONDecoder().decode([RenamePreset.ID: [String]].self, from: data) {
+            samples = saved
+        }
         ensureDefault()
+        updateBuiltInSamples()
+    }
+
+    /// 프리셋의 예시 이름 sampleCount개. 저장한 적이 없으면 기본 예시
+    func samples(for id: RenamePreset.ID) -> [String] {
+        let saved = samples[id] ?? defaultSamples(for: id)
+        return Array((saved + Array(repeating: "", count: Self.sampleCount)).prefix(Self.sampleCount))
+    }
+
+    func setSample(_ name: String, at row: Int, for id: RenamePreset.ID) {
+        var current = samples(for: id)
+        guard current.indices.contains(row) else { return }
+        current[row] = name
+        samples[id] = current
+        persistSamples()
+    }
+
+    /// 기본 예시. 저장한 예시가 없을 때 쓴다.
+    /// Fix Extensions: 바꾸기·지우기·해당 없음. 나머지(Default와 새 프리셋): 연번과 정규식 불일치
+    private func defaultSamples(for id: RenamePreset.ID) -> [String] {
+        if id != RenamePreset.defaultID, preset(id)?.name == RenamePreset.fixExtensionsName {
+            return ["IMG_1234.jpeg", "IMG_0007.jpeg.bak", "IMG_sample.jpg"]
+        }
+        return ["IMG_1234.jpg", "IMG_0007.jpg", "IMG_sample.jpg"]
+    }
+
+    /// 한 줄이라도 고치면 그때의 기본 예시가 함께 저장된다. 예전 기본 예시 그대로면 지금 기본 예시로 바꾼다
+    private func updateBuiltInSamples() {
+        let outdated: [[String]] = [
+            ["IMG_1234.jpeg", "IMG_0007.jpeg", ""],
+            ["IMG_1234.jpeg", "", ""],
+            ["IMG_1234.jpg", "", ""],
+            ["IMG_1234.jpeg", "report.docx.bak", "notes.txt"],
+        ]
+        var changed = false
+        for (id, saved) in samples where outdated.contains(saved) {
+            samples[id] = nil
+            changed = true
+        }
+        if changed { persistSamples() }
+    }
+
+    private func persistSamples() {
+        // 지워진 프리셋의 예시는 버린다
+        let ids = Set(presets.map(\.id))
+        samples = samples.filter { ids.contains($0.key) }
+        if let data = try? JSONEncoder().encode(samples) {
+            UserDefaults.standard.set(data, forKey: Self.samplesKey)
+        }
     }
 
     var defaultPreset: RenamePreset {
@@ -164,7 +252,7 @@ final class PresetStore {
         return preset.id
     }
 
-    /// 다섯 칸이 모두 None인 새 프리셋. 구분자와 구분자 옵션은 Default에서 가져온다
+    /// 여섯 칸이 모두 None인 새 프리셋. 구분자와 구분자 옵션은 Default에서 가져온다
     @discardableResult
     func add() -> RenamePreset.ID {
         let base = defaultPreset
@@ -188,6 +276,8 @@ final class PresetStore {
         copy.name = uniqueName(copy.name + " Copy")
         presets.insert(copy, at: index + 1)
         persist()
+        samples[copy.id] = samples(for: id)
+        persistSamples()
         return copy.id
     }
 
@@ -212,6 +302,7 @@ final class PresetStore {
     func delete(_ ids: Set<RenamePreset.ID>) {
         presets.removeAll { ids.contains($0.id) && !$0.isDefault }
         persist()
+        persistSamples()
     }
 
     /// Default는 맨 앞에 고정한다
@@ -237,46 +328,76 @@ final class PresetStore {
             presets.insert(Self.migratedDefault(), at: 0)
         }
         migrateLegacyFallbacks()
+        updateBuiltInDefault()
+        addFixExtensionsOnce()
         AppSettings.Legacy.all.forEach(UserDefaults.standard.removeObject(forKey:))
         persist()
     }
 
-    /// 예전 버전은 비워 둔 칸에 대체값을 썼다. 이제 빈 칸은 오류라서, 그 칸이 쓰던 값을 직접 채워 결과가 바뀌지 않게 한다.
-    /// 프리셋별 대체값이 있으면 그 값, 없으면 전역 값을 쓴다. Default의 프리셋별 값은 전역 값으로도 옮긴다
-    private func migrateLegacyFallbacks() {
-        if let defaultLegacy = presets.first(where: \.isDefault)?.legacyFallbacks,
-           UserDefaults.standard.string(forKey: AppSettings.fieldTextKey) == nil {
-            AppSettings.setFieldDefaults(defaultLegacy)
+    /// 예전 내장 Default 프리셋을 지금 내장값에 맞춘다. 결과 이름은 같다.
+    /// Text "wer-rename"(두 번째 칸 없음)은 "wer-" + "rename"으로 나눈다
+    private func updateBuiltInDefault() {
+        guard let index = presets.firstIndex(where: \.isDefault) else { return }
+        let builtIn = RenameDefaults.builtIn
+        for slot in presets[index].tokens.indices {
+            let token = presets[index].tokens[slot]
+            if token.kind == .text, token.value == builtIn.text + builtIn.textSuffix, token.option.isEmpty {
+                presets[index].tokens[slot].value = builtIn.text
+                presets[index].tokens[slot].option = builtIn.textSuffix
+            }
         }
-        let global = AppSettings.fieldDefaults
-        for index in presets.indices {
-            let values = presets[index].legacyFallbacks ?? global
-            for slot in presets[index].tokens.indices
-            where presets[index].tokens[slot].kind != .none && presets[index].tokens[slot].value.isEmpty {
-                presets[index].tokens[slot].value = values.value(for: presets[index].tokens[slot].kind)
-                if presets[index].tokens[slot].option.isEmpty {
-                    presets[index].tokens[slot].option = values.option(for: presets[index].tokens[slot].kind)
+        // 잠시 Default에 넣었던 확장자 예시는 Fix Extensions로 옮겼으므로 None으로 되돌린다
+        for slot in presets[index].tokens.indices {
+            let token = presets[index].tokens[slot]
+            let isExample = (token.kind == .changeExtension && [("jpeg", "jpg"), ("html", "md")].contains { $0 == (token.value, token.option) })
+                || (token.kind == .removeExtension && ["bak", "swp"].contains(token.value))
+            if isExample {
+                presets[index].tokens[slot] = NameToken(separator: token.separator)
+            }
+        }
+    }
+
+    /// Fix Extensions 예시 프리셋을 만들었는지. 사용자가 지우면 다시 만들지 않는다
+    private static let fixExtensionsAddedKey = "presets.fixExtensionsAdded"
+
+    /// Fix Extensions를 처음 한 번만 Default 바로 뒤에 넣는다. 같은 이름의 프리셋이 있으면 넣지 않는다
+    private func addFixExtensionsOnce() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.fixExtensionsAddedKey) else { return }
+        if !presets.contains(where: { $0.name == RenamePreset.fixExtensionsName }) {
+            presets.insert(RenamePreset.builtInFixExtensions, at: min(1, presets.count))
+        }
+        defaults.set(true, forKey: Self.fixExtensionsAddedKey)
+    }
+
+    /// 예전 버전 프리셋의 빈 칸 채우기를 마쳤는지. 지금은 빈 칸을 "나중에 채울 칸"으로 저장할 수 있어서 한 번만 한다
+    private static let legacyFallbacksMigratedKey = "presets.legacyFallbacksMigrated"
+
+    /// 예전 버전은 비워 둔 칸에 대체값을 썼다. 결과가 바뀌지 않도록 그 칸이 쓰던 값을 한 번 직접 채운다.
+    /// 프리셋별 대체값이 있으면 그 값, 없으면 Default의 대체값, 그것도 없으면 예전 Default Field Values를 쓴다
+    private func migrateLegacyFallbacks() {
+        let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: Self.legacyFallbacksMigratedKey) {
+            let global = presets.first(where: \.isDefault)?.legacyFallbacks ?? AppSettings.legacyFieldDefaults
+            for index in presets.indices {
+                let values = presets[index].legacyFallbacks ?? global
+                for slot in presets[index].tokens.indices
+                where presets[index].tokens[slot].kind.isNamePart && presets[index].tokens[slot].value.isEmpty {
+                    presets[index].tokens[slot].value = values.value(for: presets[index].tokens[slot].kind)
+                    if presets[index].tokens[slot].option.isEmpty {
+                        presets[index].tokens[slot].option = values.option(for: presets[index].tokens[slot].kind)
+                    }
                 }
             }
-            presets[index].legacyFallbacks = nil
+            defaults.set(true, forKey: Self.legacyFallbacksMigratedKey)
+            AppSettings.LegacyField.all.forEach(defaults.removeObject(forKey:))
         }
+        for index in presets.indices { presets[index].legacyFallbacks = nil }
     }
 
     private static func migratedDefault() -> RenamePreset {
         var preset = RenamePreset.builtInDefault
         let defaults = UserDefaults.standard
-        // 예전 설정의 Text·Number 기본값은 Default Field Values로 옮긴다
-        var fallbacks = AppSettings.fieldDefaults
-        if let text = defaults.string(forKey: AppSettings.Legacy.textDefault), !text.isEmpty {
-            fallbacks.text = text
-        }
-        if let number = defaults.string(forKey: AppSettings.Legacy.numberDefault), let legacy = NameToken.parseNumber(number) {
-            fallbacks.number = String(number.prefix { !$0.isWhitespace })
-            fallbacks.numberStep = String(legacy.step)
-        }
-        if fallbacks != AppSettings.fieldDefaults {
-            AppSettings.setFieldDefaults(fallbacks)
-        }
         if defaults.bool(forKey: AppSettings.Legacy.separatorSameForAll),
            let common = defaults.string(forKey: AppSettings.Legacy.separatorCommon) {
             for index in preset.tokens.indices { preset.tokens[index].separator = common }

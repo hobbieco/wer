@@ -237,7 +237,7 @@ struct ApplyFlowTests {
         #expect(model.readyCount == 1)
         #expect(model.issueDescription(for: model.orderedFiles[1].url)?.contains("slot 3") == true)
 
-        // Back하면 새 이름과 다섯 칸이 모두 이전에 적용한 규칙으로 돌아간다
+        // Back하면 새 이름과 여섯 칸이 모두 이전에 적용한 규칙으로 돌아간다
         model.backRenameSettings()
         #expect(model.renameSettings.tokens[2].kind == .none)
         #expect(model.appliedSettings?.tokens[2].kind == NameToken.Kind.none)
@@ -334,10 +334,80 @@ struct PresetTests {
 }
 
 struct DefaultPresetTests {
+    @Test func oldFiveSlotPresetIsPaddedToSix() throws {
+        let old = RenamePreset(name: "old", tokens: (0..<5).map { _ in NameToken(kind: .text, value: "a") }, usesSeparator: true)
+        let decoded = try JSONDecoder().decode(RenamePreset.self, from: JSONEncoder().encode(old))
+        #expect(decoded.tokens.count == RenameSettings.tokenCount)
+        #expect(decoded.tokens.last?.kind == NameToken.Kind.none)
+    }
+
     @Test func builtInDefaultExampleName() {
         var settings = RenameSettings()
         RenamePreset.builtInDefault.apply(to: &settings)
         #expect(settings.newName(for: "IMG_12.jpg", index: 0) == "wer-rename-0012-0001.jpg")
+        // Default는 확장자를 바꾸지 않는다
+        #expect(settings.newName(for: "IMG_12.jpeg", index: 0) == "wer-rename-0012-0001.jpeg")
+        #expect(settings.isValid)
+    }
+
+    @Test func builtInFixExtensionsChangesOnlyExtensions() {
+        var settings = RenameSettings()
+        RenamePreset.builtInFixExtensions.apply(to: &settings)
+        #expect(settings.newName(for: "IMG_12.jpeg", index: 0) == "IMG_12.jpg")
+        // 바뀐 확장자는 Change Ext 칸(0번) 색으로 칠한다
+        #expect(settings.buildNewName(for: "IMG_12.jpeg", index: 0)?.highlights == [NameHighlight(start: 7, length: 3, slot: 0)])
+        #expect(settings.newName(for: "report.docx.bak", index: 0) == "report.docx")
+        #expect(settings.newName(for: "a.png", index: 0) == "a.png")
+        #expect(settings.isValid)
+    }
+
+    @Test func textSuffixAppendedOrIgnored() {
+        #expect(NameToken(kind: .text, value: "wer-", option: "rename").resolve(stem: "a", index: 0) == "wer-rename")
+        #expect(NameToken(kind: .text, value: "wer-", option: "").resolve(stem: "a", index: 0) == "wer-")
+        #expect(NameToken(kind: .text, value: "a", option: "b/c").optionError != nil)
+        #expect(NameToken(kind: .text, value: "", option: "rename").validationError == nil)
+        #expect(NameToken(kind: .text, value: "", option: "rename").resolve(stem: "a", index: 0) == "rename")
+        #expect(NameToken(kind: .text, value: "", option: "").validationError != nil)
+    }
+
+    @Test func extensionTokens() {
+        var settings = RenameSettings()
+        settings.tokens[2] = NameToken(kind: .removeExtension, value: "doc")
+        settings.tokens[4] = NameToken(kind: .changeExtension, value: "jpeg", option: "jpg")
+        // 확장자 조각만 있으면 이름은 그대로
+        #expect(settings.newName(for: "a.doc.doc", index: 0) == "a.doc")
+        #expect(settings.newName(for: "b.jpeg", index: 0) == "b.jpg")
+        #expect(settings.newName(for: "c.png", index: 0) == "c.png")
+        // 대소문자까지 완전 일치
+        #expect(settings.newName(for: "d.JPEG", index: 0) == "d.JPEG")
+        #expect(RenameSettings.extensionCounts(of: ["a.jpeg", "b.JPEG", "c.jpeg", "d"]) == ["jpeg": 2, "JPEG": 1])
+        // 이름 조각과 함께 쓰면 순서·구분자와 상관없이 확장자만 바꾼다
+        settings.tokens[3] = NameToken(kind: .text, value: "x")
+        #expect(settings.newName(for: "b.jpeg", index: 0) == "x.jpg")
+        #expect(NameToken(kind: .changeExtension, value: "").validationError != nil)
+        #expect(NameToken(kind: .changeExtension, value: ".doc").validationError != nil)
+        #expect(NameToken(kind: .changeExtension, value: "doc", option: "a.b").optionError != nil)
+        #expect(NameToken(kind: .changeExtension, value: "doc", option: "").optionError != nil)
+        #expect(NameToken(kind: .removeExtension, value: "doc").optionError == nil)
+        // 대상과 바꿀 확장자가 같으면 경고만 (대소문자 구분)
+        #expect(NameToken(kind: .changeExtension, value: "md", option: "md").warning != nil)
+        #expect(NameToken(kind: .changeExtension, value: "MD", option: "md").warning == nil)
+        #expect(settings.isValid)
+        // 빈 칸은 Apply는 막지만 프리셋 저장(형식 오류 없음)은 막지 않는다
+        settings.tokens[1] = NameToken(kind: .removeExtension)
+        #expect(settings.tokens[1].needsInput)
+        #expect(!settings.isValid)
+        #expect(settings.formatErrors.isEmpty)
+        settings.tokens[1] = NameToken(kind: .regex, value: "(")
+        #expect(!settings.formatErrors.isEmpty)
+        settings.tokens[1] = NameToken()
+        // 대소문자가 다르면 겹치지 않는다
+        settings.tokens[0] = NameToken(kind: .changeExtension, value: "DOC", option: "md")
+        #expect(settings.isValid)
+        // 대상 확장자가 같으면 (종류 무관) 두 칸 모두 오류
+        settings.tokens[0] = NameToken(kind: .changeExtension, value: "doc", option: "md")
+        #expect(RenameSettings.extensionConflicts(in: settings.tokens) == [0: 2, 2: 0])
+        #expect(!settings.isValid)
     }
 
     @Test func textAndSeparatorRejectFileNameCharacters() {

@@ -59,7 +59,8 @@ extension BrowserModel {
         case ("↩", [.command]):
             if renamingURL != nil { return nil }
             if renameSettings.tokens.allSatisfy({ $0.kind == .none }) { return "Choose a type in at least one slot" }
-            if !renameSettings.isValid { return "Fix the errors in Rename first" }
+            if !renameSettings.formatErrors.isEmpty { return "Fix the errors in Rename first" }
+            if !renameSettings.isValid { return "Fill in the empty fields in Rename first" }
             return "Already applied"
         case ("[", [.command]):
             return "No earlier rule to go back to"

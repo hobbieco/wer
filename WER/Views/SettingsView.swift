@@ -42,11 +42,6 @@ private struct GeneralSettingsView: View {
     @AppStorage(AppSettings.removeCopiesToTrashKey) private var removesCopiesToTrash = false
     @AppStorage(AppSettings.previewAutoplaysMediaKey) private var previewAutoplaysMedia = false
     @AppStorage(AppSettings.sortFoldersFirstKey) private var sortsFoldersFirst = true
-    @AppStorage(AppSettings.fieldTextKey) private var fieldText = RenameDefaults.builtIn.text
-    @AppStorage(AppSettings.fieldNumberKey) private var fieldNumber = RenameDefaults.builtIn.number
-    @AppStorage(AppSettings.fieldRegexKey) private var fieldRegex = RenameDefaults.builtIn.regex
-    @AppStorage(AppSettings.fieldNumberStepKey) private var fieldNumberStep = RenameDefaults.builtIn.numberStep
-    @AppStorage(AppSettings.fieldRegexPadKey) private var fieldRegexPad = RenameDefaults.builtIn.regexPad
 
     var body: some View {
         Form {
@@ -62,17 +57,6 @@ private struct GeneralSettingsView: View {
                     }
                 }
                 .help("Loaded when a window opens")
-            }
-            Section {
-                fieldDefault(.text, text: $fieldText, option: nil)
-                fieldDefault(.regex, text: $fieldRegex, option: $fieldRegexPad)
-                fieldDefault(.number, text: $fieldNumber, option: $fieldNumberStep)
-            } header: {
-                Text("Default Field Values")
-            } footer: {
-                Text("Filled in when you choose a type in Rename. Fields already filled are not changed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             // 앱을 시작할 때는 현재 폴더가 없어서 두 가지만 둔다
             FolderSettingRow(
@@ -149,46 +133,6 @@ private struct GeneralSettingsView: View {
     private static let chosenFolderOptions: [(AppSettings.FolderMode, String)] = [
         (.last, "Last Chosen"), (.current, "Current Folder"), (.custom, "Specific Folder"),
     ]
-
-    /// 종류별 채울 값 (두 번째 칸은 Regex 채우기, Number 증가 폭). 입력칸과 같은 규칙으로 검사하고, 잘못되면 앱 기본값을 쓴다
-    private func fieldDefault(_ kind: NameToken.Kind, text: Binding<String>, option: Binding<String>?) -> some View {
-        let title = switch kind {
-        case .none: ""
-        case .text: "Text"
-        case .regex: "Regex"
-        case .number: "Number"
-        }
-        let token = NameToken(kind: kind, value: text.wrappedValue, option: option?.wrappedValue ?? "")
-        let builtIn = RenameDefaults.builtIn
-        return LabeledContent(title) {
-            VStack(alignment: .trailing, spacing: 2) {
-                HStack {
-                    TextField(title, text: text)
-                        .labelsHidden()
-                        .textFieldStyle(.roundedBorder)
-                        .foregroundStyle(token.validationError == nil ? Color.primary : Color.red)
-                    if let option {
-                        TextField(builtIn.option(for: kind), text: option)
-                            .labelsHidden()
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 60)
-                            .foregroundStyle(token.optionError == nil ? Color.primary : Color.red)
-                            .help(kind == .number ? "Step" : "Pad")
-                    }
-                }
-                if let error = token.validationError {
-                    Text("\(error). \"\(builtIn.value(for: kind))\" is used.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-                if let error = token.optionError {
-                    Text("\(error). \"\(builtIn.option(for: kind))\" is used.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            }
-        }
-    }
 }
 
 /// [마지막으로 고른 폴더 | 현재 폴더 | 지정 폴더] 선택과 지정 폴더 경로
@@ -262,7 +206,6 @@ private struct FolderSettingRow: View {
 private struct PresetsSettingsView: View {
     private let store = PresetStore.shared
     @State private var selection: Set<RenamePreset.ID> = []
-    @AppStorage("settings.presetSampleName") private var sampleName = "IMG_1234.jpg"
 
     /// 하나만 골랐을 때 편집한다
     private var editingID: RenamePreset.ID? {
@@ -273,9 +216,10 @@ private struct PresetsSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             list
             HStack(spacing: 4) {
-                Button("Add", systemImage: "plus") { selection = [store.add()] }
+                // 아이콘 높이가 달라(minus가 납작함) 버튼 크기가 달라 보이지 않게 아이콘 틀을 고정한다
+                Button { selection = [store.add()] } label: { Self.iconLabel("Add", "plus") }
                 // Default는 지울 수 없다
-                Button("Delete", systemImage: "minus") { store.delete(selection); selection = [] }
+                Button { store.delete(selection); selection = [] } label: { Self.iconLabel("Delete", "minus") }
                     .disabled(selection.subtracting([RenamePreset.defaultID]).isEmpty)
                 Button("Duplicate") {
                     if let id = editingID, let copy = store.duplicate(id) { selection = [copy] }
@@ -291,7 +235,11 @@ private struct PresetsSettingsView: View {
             Divider()
 
             if let id = editingID, let preset = store.presets.first(where: { $0.id == id }) {
-                PresetEditor(preset: preset, sampleName: $sampleName) { store.update($0) }
+                PresetEditor(
+                    preset: preset,
+                    samples: store.samples(for: id),
+                    onSampleChange: { store.setSample($1, at: $0, for: id) }
+                ) { store.update($0) }
             } else {
                 Text(store.presets.isEmpty ? "Add a preset with +." : "Select a preset to edit.")
                     .foregroundStyle(.secondary)
@@ -299,6 +247,15 @@ private struct PresetsSettingsView: View {
             }
         }
         .padding()
+    }
+
+    private static func iconLabel(_ title: String, _ systemImage: String) -> some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: systemImage)
+                .frame(width: 14, height: 14)
+        }
     }
 
     private var list: some View {
@@ -314,10 +271,18 @@ private struct PresetsSettingsView: View {
                         TextField("Name", text: nameBinding(preset))
                             .textFieldStyle(.roundedBorder)
                     }
-                    Text(preset.summary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        // 빈 칸이 있는 프리셋은 불러온 뒤 채워야 한다
+                        if let note = preset.needsInputNote {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .help(note)
+                        }
+                        Text(preset.summary)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .font(.caption)
                 }
                 .padding(.vertical, 2)
             }
@@ -335,10 +300,12 @@ private struct PresetsSettingsView: View {
     }
 }
 
-/// 고른 프리셋의 다섯 칸, 구분자 옵션, 예시 파일 이름 미리보기
+/// 고른 프리셋의 여섯 칸, 구분자 옵션, 예시 파일 이름 미리보기(최대 3줄)
 private struct PresetEditor: View {
     let preset: RenamePreset
-    @Binding var sampleName: String
+    /// 프리셋별 예시 이름. 빈 줄은 건너뛴다
+    let samples: [String]
+    let onSampleChange: (Int, String) -> Void
     let onChange: (RenamePreset) -> Void
 
 
@@ -357,20 +324,56 @@ private struct PresetEditor: View {
             }
             .toggleStyle(.checkbox)
 
-            // 설정 창에는 실제 파일이 없어 예시 이름으로 결과를 보여준다
+            // 설정 창에는 실제 파일이 없어 예시 이름으로 결과를 보여준다. 줄 순서가 Order 순서라 Number가 줄마다 늘어난다
             Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
                 GridRow {
                     Text("Sample")
-                        .foregroundStyle(.secondary)
-                    TextField("Sample file name", text: $sampleName)
-                        .textFieldStyle(.roundedBorder)
-                }
-                GridRow {
                     Text("Result")
-                        .foregroundStyle(.secondary)
-                    sampleResult
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                ForEach(samples.indices, id: \.self) { row in
+                    GridRow {
+                        TextField("Sample file name", text: Binding {
+                            samples[row]
+                        } set: {
+                            onSampleChange(row, $0)
+                        })
+                        .textFieldStyle(.roundedBorder)
+                        sampleResult(row)
+                            .gridColumnAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
+        }
+    }
+
+    /// 줄의 Order 번호. 빈 줄은 세지 않는다
+    private func orderIndex(_ row: Int) -> Int {
+        samples.prefix(row).filter { !$0.isEmpty }.count
+    }
+
+    @ViewBuilder
+    private func sampleResult(_ row: Int) -> some View {
+        let sample = samples[row]
+        if sample.isEmpty {
+            Text("")
+        } else if let built = previewSettings.buildNewName(for: sample, index: orderIndex(row)) {
+            if built.name == sample {
+                Text("No change")
+                    .foregroundStyle(.secondary)
+            } else {
+                // 글자 선택을 켜면 배경색이 그려지지 않아 끈다
+                Text(HighlightedText.make(built.name, highlights: built.highlights))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(built.name)
+            }
+        } else {
+            Text("No name")
+                .foregroundStyle(.secondary)
+                .help("All slots are empty or invalid, or nothing matched")
         }
     }
 
@@ -381,17 +384,6 @@ private struct PresetEditor: View {
         settings.usesSeparator = preset.usesSeparator
         settings.omitsLastSeparator = preset.omitsLastSeparator
         return settings
-    }
-
-    @ViewBuilder
-    private var sampleResult: some View {
-        if let built = previewSettings.buildNewName(for: sampleName, index: 0) {
-            Text(HighlightedText.make(built.name, highlights: built.highlights))
-                .textSelection(.enabled)
-        } else {
-            Text("No name (all slots empty or no match)")
-                .foregroundStyle(.secondary)
-        }
     }
 
     private func binding<Value>(_ keyPath: WritableKeyPath<RenamePreset, Value>) -> Binding<Value> {

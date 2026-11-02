@@ -4,7 +4,7 @@
 
 **Want to Edit file Rename** — a macOS app for renaming many files at once with your own rules.
 
-Pick files, put them in the order you want, build new names from up to five parts, preview the result, then rename or copy.
+Pick files, put them in the order you want, build new names from up to six slots, preview the result, then rename or copy.
 
 ![WER main window: Select, Order with new names, and Rename](docs/images/wer-main.png)
 
@@ -26,13 +26,17 @@ Batch renamers didn't help much, because they number files by a sort key — nam
 
 - **Select** files in a folder (folders are shown but never renamed). Finder-like path bar, Go to Folder with path completion, number order (file2, file10) or text order (file10, file2).
 - **Order** the files that will be renamed: move up/down, by 10, to top/bottom, drag, reverse, reset to folder order.
-- **Rename** with up to five parts, each one of:
-  - **Text** — fixed text
+- **Rename** with up to six slots, each one of:
+  - **Text** — fixed text, in two fields joined together (e.g. `wer-` + `rename`)
   - **Regex** — part of the original name, with optional left padding (e.g. `\((\d+)\)` + `0000` → `0012`)
   - **Number** — sequence with start, digits and step (e.g. `0001`, step `1`)
-- Per-part separators, colored highlights that show which part made which piece of the new name.
+  - **Change Ext** — change one extension to another, exact match (e.g. `jpeg` → `jpg`)
+  - **Remove Ext** — remove an extension, exact match (e.g. `bak` to turn `report.docx.bak` back into `report.docx`)
+  - Extension rules apply once per file, to its original extension; a result is never changed again by another rule.
+- Per-part separators, colored highlights that show which part made which piece of the new name. Extension rules show how many files in Order have their extension (orange when none).
+- Empty required fields are outlined in orange, invalid ones in red.
 - **Checks before running**: duplicate names, names already in the folder, invalid characters (`/`, `:`), names longer than 255 bytes, hidden names, regex mismatches. Case-sensitive and case-insensitive volumes are handled.
-- **Presets**: save and load naming rules. A built-in Default preset shows an example of every part.
+- **Presets**: save and load naming rules. A preset can keep empty fields to fill in after loading (marked ⚠). Built-in examples: **Default** (Text, Regex, Number) and **Fix Extensions** (Change Ext, Remove Ext).
 - **Copy mode**: write renamed copies to another folder instead of renaming originals.
 
 ## Safety
@@ -48,13 +52,15 @@ Batch renamers didn't help much, because they number files by a sort key — nam
 1. **Open a folder** — File > Open Folder… (⇧⌘O), Go to Folder… (⇧⌘G), or `open -a WER <folder>` from Terminal.
 2. **Pick files in Select** and add them to **Order** — ⌘→, double-click, or drag. ⌥⌘→ adds every file in the folder.
 3. **Arrange Order** — ⌘↑ / ⌘↓ moves the selection, ⌥⌘↑ / ⌥⌘↓ to top or bottom, drag to move, ⇧⌘R reverses. New names are numbered in this order.
-4. **Build the rule in Rename** — choose a type for each slot (⌘1–⌘5 opens the type menu) and fill in its value, or load a preset (⌘L). Turn on **Separator** to join the parts with the separators you set.
+4. **Build the rule in Rename** — choose a type for each slot (⌘1–⌘6 opens the type menu) and fill in its fields, which start empty, or load a preset (⌘L). Turn on **Separator** to join the parts with the separators you set.
 5. **Apply** (⌘↩) — the New Name column shows the result. Red names and icons mark conflicts or invalid names; fix them before running. ⌘[ goes back to the previous rule.
-6. **Run Rename** — confirm, and watch the log in the Preview area. Turn on **Copy** first to write renamed copies to another folder instead. Undo the last run with ⌥⌘Z or the Undo button.
+6. **Run Rename** — confirm (the dialog also warns when extensions will change), and watch the log in the Preview area. Turn on **Copy** first to write renamed copies to another folder instead. Undo the last run with ⌥⌘Z or the Undo button.
 
 Example — rename photos to `trip-0001.jpg`, `trip-0002.jpg`, …: slot 1 **Text** `trip`, slot 2 **Number** `0001` with step `1`, Separator on with `-`. The extension is kept.
 
-Settings (⌘,) holds the startup preset, default field values, start folders, and presets you can edit with a sample name:
+Example — fix extensions only: load **Fix Extensions**. `IMG_1234.jpeg` becomes `IMG_1234.jpg`, `IMG_0007.jpeg.bak` becomes `IMG_0007.jpeg`, and other files keep their names.
+
+Settings (⌘,) holds the startup preset, start folders, and presets you can edit while checking the result on up to three sample names:
 
 <p align="center">
   <img src="docs/images/wer-setting-general.png" alt="Settings: General" width="360">
@@ -100,7 +106,7 @@ Arrow-key shortcuts work only while the list they belong to has focus, so ⌘ + 
 | | Move Up / Down (Order focused) | ⌘↑ / ⌘↓ |
 | | Move to Top / Bottom (Order focused) | ⌥⌘↑ / ⌥⌘↓ |
 | | Reverse (press again to undo) | ⇧⌘R |
-| Rename | Open type menu of slot 1–5 | ⌘1 – ⌘5 |
+| Rename | Open type menu of slot 1–6 | ⌘1 – ⌘6 |
 | | Apply | ⌘↩ |
 | | Back | ⌘[ |
 | | Open the preset menu | ⌘L |

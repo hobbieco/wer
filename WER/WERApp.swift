@@ -39,6 +39,9 @@ struct WERApp: App {
         }
         .defaultSize(width: 520, height: 600)
         .windowResizability(.contentMinSize)
+        // 앱을 시작할 때 저절로 열리지 않게 한다. 열린 채로 종료(Xcode Stop 등)해도 다음 실행 때 복원하지 않는다
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
         .commandsRemoved()
     }
 }
@@ -185,7 +188,7 @@ private struct OrderCommands: Commands {
     }
 }
 
-/// ① 메뉴 > Rename. ⌘1~5는 칸 종류 드롭다운, ⌘↩는 Apply
+/// ① 메뉴 > Rename. ⌘1~6는 칸 종류 드롭다운, ⌘↩는 Apply
 private struct RenameCommands: Commands {
     @FocusedValue(\.browserModel) private var model
 

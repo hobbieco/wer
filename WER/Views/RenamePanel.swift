@@ -26,7 +26,8 @@ struct RenamePanel: View {
                 omitsLastSeparator: model.renameSettings.omitsLastSeparator,
                 onFocusChange: { model.setFocus(.rename, $0) },
                 kindMenuRequest: model.kindMenuRequest,
-                focusRequest: model.focusRequest?.pane == .rename ? model.focusRequest?.id : nil
+                focusRequest: model.focusRequest?.pane == .rename ? model.focusRequest?.id : nil,
+                extensionCounts: RenameSettings.extensionCounts(of: model.orderedFiles.map(\.name))
             )
 
             HStack {
@@ -125,18 +126,28 @@ struct RenamePanel: View {
             let item = MenuAction.item(title: preset.name) { model.loadPreset(preset) }
             item.state = preset.id == model.loadedPresetID ? .on : .off
             item.toolTip = preset.summary
+            // 빈 칸이 있는 프리셋은 불러온 뒤 채워야 한다
+            if let note = preset.needsInputNote {
+                item.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: note)
+                item.toolTip = note + "\n" + preset.summary
+            }
             menu.addItem(item)
         }
         menu.addItem(.separator())
-        // 오류가 있는 규칙은 저장하지 않는다
+        // 형식 오류가 있는 규칙은 저장하지 않는다. 빈 칸은 불러온 뒤 채우는 틀로 저장할 수 있다
+        let formatErrors = model.renameSettings.formatErrors
+        let blockedNote = formatErrors.isEmpty ? nil
+            : "Fix errors first:\n" + formatErrors.map { "Slot \($0.slot + 1): \($0.message)" }.joined(separator: "\n")
         let save = MenuAction.item(title: "Save to “\(model.loadedPreset?.name ?? "")”") { model.saveToLoadedPreset() }
-        save.isEnabled = model.isPresetModified && model.renameSettings.isValid
+        save.isEnabled = model.isPresetModified && formatErrors.isEmpty
+        save.toolTip = blockedNote
         menu.addItem(save)
         let saveAs = MenuAction.item(title: "Save as New Preset…") {
             presetName = ""
             isSavingPreset = true
         }
-        saveAs.isEnabled = !model.renameSettings.tokens.allSatisfy { $0.kind == .none } && model.renameSettings.isValid
+        saveAs.isEnabled = !model.renameSettings.tokens.allSatisfy { $0.kind == .none } && formatErrors.isEmpty
+        saveAs.toolTip = blockedNote
         menu.addItem(saveAs)
         menu.addItem(.separator())
         menu.addItem(MenuAction.item(title: "Manage Presets…") {

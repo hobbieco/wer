@@ -5,17 +5,19 @@
 
 import SwiftUI
 
-/// 이름 조각 다섯 칸 편집. Rename 칸과 설정의 프리셋 편집에서 함께 쓴다
+/// 이름 조각 여섯 칸 편집. Rename 칸과 설정의 프리셋 편집에서 함께 쓴다
 struct TokenGridEditor: View {
     @Binding var tokens: [NameToken]
     let usesSeparator: Bool
     let omitsLastSeparator: Bool
     /// 입력칸 중 하나라도 포커스를 받거나 모두 잃을 때 부른다 (Rename 칸 제목 강조용)
     var onFocusChange: ((Bool) -> Void)?
-    /// ⌘1~5 요청. 바뀌면 그 칸의 종류 드롭다운을 연다 (Rename 칸만)
+    /// ⌘1~6 요청. 바뀌면 그 칸의 종류 드롭다운을 연다 (Rename 칸만)
     var kindMenuRequest: BrowserModel.KindMenuRequest?
     /// ⌘T로 Rename 칸에 온 요청. 바뀌면 마지막으로 쓰던 입력칸(없으면 첫 활성 값 칸)에 포커스를 준다
     var focusRequest: UUID?
+    /// Order 파일의 확장자별 개수. 확장자 규칙 줄의 구분자 자리에 일치 파일 수로 보여준다 (설정의 프리셋 편집은 nil)
+    var extensionCounts: [String: Int]?
 
     @State private var hoveredSlot: Int?
     // 손잡이를 끄는 중인 칸과 놓을 자리
@@ -52,50 +54,76 @@ struct TokenGridEditor: View {
                         Text("Text").tag(NameToken.Kind.text)
                         Text("Regex").tag(NameToken.Kind.regex)
                         Text("Number").tag(NameToken.Kind.number)
+                        Divider()
+                        Text("Change Ext").tag(NameToken.Kind.changeExtension)
+                        Text("Remove Ext").tag(NameToken.Kind.removeExtension)
                     }
                     .frame(width: 90)
-                    // ⌘1~5 메뉴를 띄울 자리
+                    // ⌘1~6 메뉴를 띄울 자리
                     .background(MenuAnchor { menuAnchors.views[token.id] = $0 })
-                    // 비활성 칸은 회색 배경으로 구분한다 (None 줄 전체, Text의 두 번째 칸, 쓰지 않는 구분자)
+                    // 비활성 칸은 회색 배경으로 구분한다 (None 줄 전체, 쓰지 않는 구분자)
                     let isNone = token.kind == .none
-                    let isOptionDisabled = isNone || token.kind == .text
-                    let isSeparatorDisabled = isNone || !usesSeparator || isOmittedSeparator(slot)
-                    TextField(RenameDefaults.builtIn.value(for: token.kind), text: $token.value)
+                    let isOptionDisabled = isNone || token.kind == .removeExtension
+                    let isSeparatorDisabled = !token.kind.isNamePart || !usesSeparator || isOmittedSeparator(slot)
+                    // 형식 오류는 빨강, 빈 칸은 주황 테두리.
+                    // Text 두 칸이 모두 비면 커서가 있는 칸에 표시한다 (커서가 없으면 첫 칸)
+                    let isEmptyTextOnOption = token.isEmptyText && focusedField == FieldID(token: token.id, column: 1)
+                    // 대상 확장자가 다른 확장자 규칙과 겹치면 첫 칸에 오류를 표시한다
+                    let conflictError = extensionConflicts[slot].map(RenameSettings.conflictMessage)
+                    // 예시(placeholder)는 값으로 오해해 지우려 하게 되어 두지 않는다. 형식은 도움말로 안내한다
+                    TextField("", text: $token.value)
                         .focused($focusedField, equals: FieldID(token: token.id, column: 0))
                         .multilineTextAlignment(.center)
-                        .invalidBorder(token.validationError != nil)
-                        .help(token.validationError ?? Self.help(for: token.kind))
+                        .invalidBorder(
+                            (token.validationError != nil && !token.needsValue) || conflictError != nil,
+                            needsInput: token.needsValue && !isEmptyTextOnOption
+                        )
+                        .help(token.validationError ?? conflictError ?? Self.help(for: token.kind))
                         .disabled(isNone)
                         .disabledBackground(isNone)
-                    // 두 번째 칸: Number 증가 폭, Regex 채우기 모양. Text는 쓰지 않는다
-                    TextField(RenameDefaults.builtIn.option(for: token.kind), text: $token.option)
+                    // 두 번째 칸: Text 뒤 문자열(비우면 무시), Number 증가 폭, Regex 채우기 모양
+                    TextField("", text: $token.option)
                         .focused($focusedField, equals: FieldID(token: token.id, column: 1))
                         .multilineTextAlignment(.center)
                         .frame(width: 66)
-                        .invalidBorder(token.optionError != nil)
-                        .help(token.optionError ?? Self.optionHelp(for: token.kind))
+                        .invalidBorder(
+                            token.optionError != nil && !token.needsOption,
+                            needsInput: token.needsOption || isEmptyTextOnOption || token.warning != nil
+                        )
+                        .help(token.optionError ?? (isEmptyTextOnOption ? token.validationError : nil) ?? token.warning
+                            ?? Self.optionHelp(for: token.kind))
                         .disabled(isOptionDisabled)
                         .disabledBackground(isOptionDisabled)
-                    TextField("Sep", text: $token.separator)
-                        .focused($focusedField, equals: FieldID(token: token.id, column: 2))
-                        .multilineTextAlignment(.center)
-                        .frame(width: 30)
-                        .invalidBorder(token.separatorError != nil)
-                        .help(token.separatorError ?? (isOmittedSeparator(slot) ? "Omitted after the last slot" : "Separator"))
-                        .disabled(isSeparatorDisabled)
-                        .disabledBackground(isSeparatorDisabled)
+                    if token.kind.isExtensionRule {
+                        // 확장자 규칙은 구분자를 쓰지 않아 그 자리에 Order의 일치 파일 수를 보여준다
+                        extensionCountLabel(token)
+                    } else {
+                        TextField("Sep", text: $token.separator)
+                            .focused($focusedField, equals: FieldID(token: token.id, column: 2))
+                            .multilineTextAlignment(.center)
+                            .frame(width: 30)
+                            .invalidBorder(token.separatorError != nil)
+                            .help(token.separatorError ?? (isOmittedSeparator(slot) ? "Omitted after the last slot" : "Separator"))
+                            .disabled(isSeparatorDisabled)
+                            .disabledBackground(isSeparatorDisabled)
+                    }
                 }
                 // 끄는 중인 칸은 흐리게
                 .opacity(dragSource == slot ? 0.5 : 1)
-                // 오류가 있는 칸은 줄 전체를 옅은 빨간색으로, 끌어다 놓을 자리는 강조색으로
+                // 형식 오류가 있는 칸은 줄 전체를 옅은 빨간색, 빈 칸만 있으면 옅은 주황색, 끌어다 놓을 자리는 강조색으로
                 .background {
                     if dropTargetSlot == slot, dragSource != slot {
                         RoundedRectangle(cornerRadius: 4)
                             .fill(Color.accentColor.opacity(0.2))
                             .padding(-2)
-                    } else if token.validationError != nil || token.optionError != nil || token.separatorError != nil {
+                    } else if (token.validationError != nil && !token.needsValue) || (token.optionError != nil && !token.needsOption)
+                                || token.separatorError != nil || extensionConflicts[slot] != nil {
                         RoundedRectangle(cornerRadius: 4)
                             .fill(Color.red.opacity(0.12))
+                            .padding(-2)
+                    } else if token.needsInput {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.orange.opacity(0.12))
                             .padding(-2)
                     }
                 }
@@ -131,7 +159,7 @@ struct TokenGridEditor: View {
             RoundedRectangle(cornerRadius: 4)
                 .fill(RegexPalette.color(slot))
                 .frame(width: 14, height: 18)
-            // 평소에는 칸 번호(⌘1~5), 마우스를 올리면 끌기 표시
+            // 평소에는 칸 번호(⌘1~6), 마우스를 올리면 끌기 표시
             if hoveredSlot == slot {
                 Image(systemName: "line.3.horizontal")
                     .font(.system(size: 8, weight: .bold))
@@ -201,7 +229,7 @@ struct TokenGridEditor: View {
         let menu = NSMenu()
         var current: NSMenuItem?
         // Picker와 같은 순서 (None은 구분선으로 분리)
-        for kind in [NameToken.Kind.none, .text, .regex, .number] {
+        for kind in [NameToken.Kind.none, .text, .regex, .number, .changeExtension, .removeExtension] {
             let item = MenuAction.item(title: Self.title(for: kind)) {
                 guard let index = tokens.firstIndex(where: { $0.id == tokenID }) else { return }
                 Self.select(kind, for: &tokens[index])
@@ -211,7 +239,7 @@ struct TokenGridEditor: View {
                 current = item
             }
             menu.addItem(item)
-            if kind == .none { menu.addItem(.separator()) }
+            if kind == .none || kind == .number { menu.addItem(.separator()) }
         }
         // 메뉴 명령 처리 중에는 다른 메뉴를 열 수 없어서 다음 차례에 연다. popUp은 메뉴를 닫을 때까지 기다린다
         DispatchQueue.main.async {
@@ -228,15 +256,44 @@ struct TokenGridEditor: View {
         case .text: "Text"
         case .regex: "Regex"
         case .number: "Number"
+        case .changeExtension: "Change Ext"
+        case .removeExtension: "Remove Ext"
         }
     }
 
-    /// 사용자가 종류를 고르면 설정 > General의 Default Field Values로 값을 채운다
+    /// 확장자 규칙의 Order 일치 파일 수. 0이면 주황색
+    private func extensionCountLabel(_ token: NameToken) -> some View {
+        // 파일 정보가 없거나(설정의 프리셋 편집) 대상이 비었거나 잘못되면 일치 파일이 없는 것으로 보고 0
+        let count = token.validationError == nil
+            ? extensionCounts?[RenameSettings.extensionKey(token.value)] ?? 0
+            : 0
+        let help = if extensionCounts == nil {
+            "Number of files in Order with this extension (exact match, case-sensitive)"
+        } else if count == 0 {
+            token.value.isEmpty ? "No files match an empty extension" : "No files with .\(token.value) in Order (exact match, case-sensitive)"
+        } else {
+            "\(count) files with .\(token.value) in Order"
+        }
+        return Text(count > 99 ? "99+" : String(count))
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(count == 0 ? Color.orange : Color.primary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(width: 30)
+            .help(help)
+    }
+
+    /// 칸별 확장자 대상 겹침 (칸 → 겹치는 칸)
+    private var extensionConflicts: [Int: Int] {
+        RenameSettings.extensionConflicts(in: tokens)
+    }
+
+    /// 사용자가 종류를 고르면 두 칸을 비운다. 채워야 하는 칸은 주황 테두리로 보인다 (자주 쓰는 값은 프리셋으로)
     private static func select(_ kind: NameToken.Kind, for token: inout NameToken) {
         guard kind != token.kind else { return }
         token.kind = kind
-        token.value = AppSettings.fieldDefaults.value(for: kind)
-        token.option = AppSettings.fieldDefaults.option(for: kind)
+        token.value = ""
+        token.option = ""
     }
 
     /// 칸을 target 위치로 옮긴다. 종류·값·구분자가 함께 움직이고 색은 위치를 따른다
@@ -265,30 +322,39 @@ struct TokenGridEditor: View {
         let kind = tokens[slot].kind
         switch field.column {
         case 0: return kind != .none
-        case 1: return kind != .none && kind != .text
-        default: return kind != .none && usesSeparator && !isOmittedSeparator(slot)
+        case 1: return kind != .none && kind != .removeExtension
+        default: return kind.isNamePart && usesSeparator && !isOmittedSeparator(slot)
         }
     }
 
-    /// 마지막 칸 뒤 구분자를 빼는 옵션이면, None이 아닌 마지막 칸의 구분자는 쓰이지 않는다
+    /// 마지막 칸 뒤 구분자를 빼는 옵션이면, 이름 조각인 마지막 칸의 구분자는 쓰이지 않는다
     private func isOmittedSeparator(_ slot: Int) -> Bool {
-        omitsLastSeparator && slot == tokens.lastIndex { $0.kind != .none }
+        omitsLastSeparator && slot == tokens.lastIndex { $0.kind.isNamePart }
     }
+
+    /// 확장자 규칙은 파일마다 원래 확장자에 한 번만 적용한다. 한 규칙이 바꾼 결과를 다른 규칙이 다시 바꾸지 않는다
+    private static let singlePassNote =
+        "Each file uses at most one extension rule, on its original extension. A changed result is not changed again by another rule, e.g. a.jpeg.bak → a.jpeg"
 
     private static func help(for kind: NameToken.Kind) -> String {
         switch kind {
         case .none: "Not used"
-        case .text: "Fixed text"
+        case .text: "Fixed text. Either field must have a value"
         case .number: "Start number. Digits follow its length, e.g. 0001. Negative is allowed, e.g. -01"
         case .regex: "Extract from original name. First capture group, or whole match"
+        case .changeExtension: "Extension to change, without dot (exact match, case-sensitive), e.g. jpeg. Order is ignored. \(Self.singlePassNote)"
+        case .removeExtension: "Extension to remove, without dot (exact match, case-sensitive), e.g. bak: a.docx.bak → a.docx, or html for extensionless server files. Order is ignored. \(Self.singlePassNote)"
         }
     }
 
     private static func optionHelp(for kind: NameToken.Kind) -> String {
         switch kind {
-        case .none, .text: "Not used"
+        case .none: "Not used"
+        case .text: "Appended to the text. Ignored if empty. Either field must have a value"
         case .number: "Step. Empty means 1, negative counts down. 0 isn't allowed"
         case .regex: "Pad on the left to this length with its character, e.g. 0000 → 0012. Empty: no padding"
+        case .changeExtension: "New extension, without dot, e.g. jpg"
+        case .removeExtension: "Not used"
         }
     }
 }
@@ -306,11 +372,12 @@ private extension View {
     }
 
     /// 값 오류가 있는 입력칸에 빨간 테두리 (빈 값은 글자가 없어 테두리로 표시)
-    func invalidBorder(_ isInvalid: Bool) -> some View {
+    /// 형식 오류는 빨간 테두리, 빈 칸(채워야 함)은 주황 테두리. 둘 다면 빨강
+    func invalidBorder(_ isInvalid: Bool, needsInput: Bool = false) -> some View {
         overlay {
-            if isInvalid {
+            if isInvalid || needsInput {
                 RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color.red, lineWidth: 1.5)
+                    .stroke(isInvalid ? Color.red : Color.orange, lineWidth: 1.5)
             }
         }
     }
