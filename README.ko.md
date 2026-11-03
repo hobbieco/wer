@@ -38,13 +38,14 @@
 - **실행 전 검사**: 이름 중복, 폴더에 이미 있는 이름, 쓸 수 없는 문자(`/`, `:`), 255바이트를 넘는 이름, 숨김 파일이 되는 이름, 정규식 불일치. 대소문자를 구분하는 볼륨과 구분하지 않는 볼륨을 모두 처리합니다.
 - **프리셋**: 이름 규칙을 저장하고 불러옵니다. 불러온 뒤 채울 빈 칸을 남긴 채 저장할 수 있습니다(⚠ 표시). 기본 제공 예시로 **Default**(Text, Regex, Number)와 **Fix Extensions**(Change Ext, Remove Ext, Add Ext)가 있습니다.
 - **복사 모드**: 원본 이름을 바꾸지 않고, 새 이름으로 다른 폴더에 복사합니다. Copy To 자리에 폴더를 끌어다 놓아 지정할 수 있습니다.
+- **업로드 테스트용 빈 파일**: 현재 폴더에 정확한 크기의 테스트 파일을 만듭니다(File > Add Empty Files…, ⌥⌘N, 또는 Select의 Sort 옆 버튼). 파일 이름에 바이트 크기가 들어가서(예: `wer-create-0010485760.pdf`) 업로드가 어느 크기에서 막혔는지 바로 알 수 있습니다.
 - **보기**: 목록 글자 크기(Small, Medium, Large)와, 파일 이름·입력칸의 고정폭 글꼴(숫자 자리가 줄마다 맞음, 기본 켬).
 
 ## 안전장치
 
 - 실행할 때마다 **확인 창**을 띄웁니다.
 - **전부 아니면 전무**: 파일 하나라도 실패하면 그 실행의 변경을 모두 되돌립니다.
-- 마지막 실행을 **되돌릴 수 있습니다**(Edit > Undo Last Rename, ⌥⌘Z).
+- 마지막 실행을 **되돌릴 수 있습니다**(Edit > Undo Last Rename, ⌥⌘Z). 마지막으로 만든 빈 파일도 같은 방법으로 되돌리며, 만든 파일을 휴지통으로 옮깁니다.
 - **복구**: 실행 도중 앱이 종료되면 다음 실행 때 원래 이름으로 되돌릴지 묻습니다.
 - 복사 모드에서는 원본을 건드리지 않습니다. 복사본을 지울 때(실패, 되돌리기, 복구)는 기본적으로 영구 삭제하며, 설정에서 휴지통으로 옮기도록 바꿀 수 있습니다. 네트워크 드라이브와 일부 외장 볼륨에는 휴지통이 없어 항상 영구 삭제합니다.
 
@@ -61,11 +62,25 @@
 
 예: 확장자만 고치기 — **Fix Extensions**를 불러옵니다. `IMG_1234.jpeg`는 `IMG_1234.jpg`, `IMG_0007.jpeg.bak`은 `IMG_0007.jpeg`, 확장자가 없는 `IMG_sample`은 `IMG_sample.jpg`가 되고, 나머지 파일은 이름이 그대로입니다.
 
-설정(⌘,)에서는 시작 프리셋, 시작 폴더, 목록 글자 크기와 고정폭 글꼴을 정하고, 최대 세 개의 예시 파일 이름으로 결과를 보며 프리셋을 편집합니다.
+### 빈 파일 만들기 (Add Empty Files)
+
+File > Add Empty Files…(⌥⌘N)는 Select에 보이는 폴더에 업로드 용량 제한 테스트용 파일을 만듭니다.
+
+- **Unit**은 Min과 Max에 함께 적용됩니다. B, KB/MB/GB(×1000), KiB/MiB/GiB(×1024). 소수는 바이트로 바꿀 때 내림합니다.
+- **Min / Max / Count** — Min부터 Max까지 양 끝을 포함해 균등하게 나눕니다. 1개면 Max만 쓰고, Max가 비면 모두 Min 크기로 만듭니다. 빈 칸은 Name `wer-create`, Max 10, Count 1로 채웁니다.
+- **Fill** — **Zeros**는 sparse 파일로 바로 만들고, **Random**은 난수로 끝까지 채워 서버가 압축할 수 없습니다(느림).
+- 이름은 `<Name>-<바이트 크기>.<Ext>`이고 가장 큰 크기의 자릿수로 0을 채웁니다. 크기가 같은 파일에는 `-1`, `-2`, …를 붙입니다. 아래 목록에서 파일마다 바이트 크기와 Finder 방식 크기를 보여 주고, 볼륨의 남은 용량도 함께 보여 줍니다.
+- 기존 파일은 덮어쓰지 않습니다. 같은 이름이 있으면 Create가 꺼지고 **Show in Finder**로 정리할 파일을 보여 줍니다. **Add to Order**를 켜면 만든 파일을 Order에 넣습니다.
+- 결과는 Preview 자리의 로그에 나오고, **Undo Add Empty Files**(또는 ⌥⌘Z)로 만든 파일을 휴지통으로 옮깁니다.
+
+### 설정
+
+설정(⌘,)에서는 시작 프리셋, 시작 폴더, 목록 글자 크기와 고정폭 글꼴을 정하고, 최대 세 개의 예시 파일 이름으로 결과를 보며 프리셋을 편집합니다. Add Empty Files 창이 처음에 채울 값도 여기서 정합니다.
 
 <p align="center">
-  <img src="docs/images/wer-setting-general.png" alt="설정: General" width="360">
-  <img src="docs/images/wer-setting-preset.png" alt="설정: Presets" width="360">
+  <img src="docs/images/wer-setting-general.png" alt="설정: General" width="240">
+  <img src="docs/images/wer-setting-preset.png" alt="설정: Presets" width="240">
+  <img src="docs/images/wer-setting-empty.png" alt="설정: Empty Files" width="240">
 </p>
 
 ### 터미널에서 열기
@@ -94,7 +109,8 @@ wer() { open -a WER "${1:-.}"; }
 | | Open Folder… | ⇧⌘O |
 | | Go to Folder… | ⇧⌘G |
 | | 상위 폴더로 (Select 포커스, Order가 비어 있을 때) | ⌘↑ |
-| Edit | Undo Last Rename | ⌥⌘Z |
+| | Add Empty Files… | ⌥⌘N |
+| Edit | Undo Last Rename (또는 Undo Add Empty Files) | ⌥⌘Z |
 | View | Refresh | ⌘R |
 | | Sort By > Switch Sort Order (숫자 ↔ 글자 순서) | ⌃⌘S |
 | | Show Hidden Files | ⇧⌘. |

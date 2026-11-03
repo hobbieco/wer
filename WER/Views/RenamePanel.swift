@@ -86,7 +86,7 @@ struct RenamePanel: View {
                     entries: model.runLog,
                     isRunning: model.isRunning,
                     onUndo: model.isRunLogUndoable && model.canUndoRun ? { Task { await model.undoRun() } } : nil,
-                    undoTitle: model.lastRun?.plan.isCopy == true ? "Undo Copy" : "Undo Rename"
+                    undoTitle: model.runLogUndoTitle
                 ) {
                     model.isShowingRunLog = false
                 }

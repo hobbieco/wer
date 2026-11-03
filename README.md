@@ -38,13 +38,14 @@ Batch renamers didn't help much, because they number files by a sort key — nam
 - **Checks before running**: duplicate names, names already in the folder, invalid characters (`/`, `:`), names longer than 255 bytes, hidden names, regex mismatches. Case-sensitive and case-insensitive volumes are handled.
 - **Presets**: save and load naming rules. A preset can keep empty fields to fill in after loading (marked ⚠). Built-in examples: **Default** (Text, Regex, Number) and **Fix Extensions** (Change Ext, Remove Ext, Add Ext).
 - **Copy mode**: write renamed copies to another folder instead of renaming originals. Drop a folder on Copy To to choose it.
+- **Empty files for upload tests**: create test files of exact sizes in the current folder (File > Add Empty Files…, ⌥⌘N, or the button next to Sort in Select). Files are named by size in bytes, e.g. `wer-create-0010485760.pdf`, so you can tell which size an upload rejected.
 - **Display**: list text size (Small, Medium, Large) and a fixed-width font for file names and name fields, so numbers line up (on by default).
 
 ## Safety
 
 - **Confirmation** before every run.
 - **All or nothing**: if any file fails, every change in that run is reverted.
-- **Undo** the last run (Edit > Undo Last Rename, ⌥⌘Z).
+- **Undo** the last run (Edit > Undo Last Rename, ⌥⌘Z). This also undoes the last Add Empty Files, moving the created files to the Trash.
 - **Recovery**: if the app quits in the middle of a run, it offers to restore the original names on the next launch.
 - Originals are never touched in copy mode. Removing copies (on failure, undo, or recovery) deletes them permanently by default; you can choose to move them to the Trash in Settings. Network drives and some external volumes have no Trash, so copies there are always deleted permanently.
 
@@ -61,11 +62,25 @@ Example — rename photos to `trip-0001.jpg`, `trip-0002.jpg`, …: slot 1 **Tex
 
 Example — fix extensions only: load **Fix Extensions**. `IMG_1234.jpeg` becomes `IMG_1234.jpg`, `IMG_0007.jpeg.bak` becomes `IMG_0007.jpeg`, `IMG_sample` (no extension) becomes `IMG_sample.jpg`, and other files keep their names.
 
-Settings (⌘,) holds the startup preset, start folders, list text size and fixed-width font, and presets you can edit while checking the result on up to three sample names:
+### Add Empty Files
+
+File > Add Empty Files… (⌥⌘N) creates files in the folder shown in Select, for testing upload size limits:
+
+- **Unit** applies to Min and Max: B, KB/MB/GB (×1000) or KiB/MiB/GiB (×1024). Decimals are rounded down to whole bytes.
+- **Min / Max / Count** — sizes are spread evenly from Min to Max, both included. With one file only Max is used; with Max empty, every file is Min. Empty fields use Name `wer-create`, Max 10, Count 1.
+- **Fill** — **Zeros** creates sparse files instantly; **Random** writes the whole file with random data, so servers can't compress it (slower).
+- Names are `<Name>-<size in bytes>.<Ext>`, zero-padded to the largest size; files of the same size get `-1`, `-2`, … The list at the bottom shows every file with its size in bytes and as Finder shows it, next to the free space on the volume.
+- Existing files are never overwritten: if a name already exists, Create is disabled and **Show in Finder** shows the files to clean up. Turn on **Add to Order** to add the new files to Order.
+- The result appears in the log in the Preview area, where **Undo Add Empty Files** (or ⌥⌘Z) moves them to the Trash.
+
+### Settings
+
+Settings (⌘,) holds the startup preset, start folders, list text size and fixed-width font, presets you can edit while checking the result on up to three sample names, and the values Add Empty Files starts with:
 
 <p align="center">
-  <img src="docs/images/wer-setting-general.png" alt="Settings: General" width="360">
-  <img src="docs/images/wer-setting-preset.png" alt="Settings: Presets" width="360">
+  <img src="docs/images/wer-setting-general.png" alt="Settings: General" width="240">
+  <img src="docs/images/wer-setting-preset.png" alt="Settings: Presets" width="240">
+  <img src="docs/images/wer-setting-empty.png" alt="Settings: Empty Files" width="240">
 </p>
 
 ### Open from Terminal
@@ -94,7 +109,8 @@ Arrow-key shortcuts work only while the list they belong to has focus, so ⌘ + 
 | | Open Folder… | ⇧⌘O |
 | | Go to Folder… | ⇧⌘G |
 | | Enclosing Folder (Select focused, Order empty) | ⌘↑ |
-| Edit | Undo Last Rename | ⌥⌘Z |
+| | Add Empty Files… | ⌥⌘N |
+| Edit | Undo Last Rename (or Undo Add Empty Files) | ⌥⌘Z |
 | View | Refresh | ⌘R |
 | | Sort By > Switch Sort Order (Number ↔ Text order) | ⌃⌘S |
 | | Show Hidden Files | ⇧⌘. |

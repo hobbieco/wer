@@ -41,6 +41,8 @@ final class BrowserModel {
         }
     }
     var isGoToFolderPresented = false
+    /// Add Empty Files 창 (⌥⌘N)
+    var isEmptyFilesPresented = false
 
     /// 칸 구분. 키 입력을 받는 칸을 나타낸다
     enum Pane { case select, order, rename }
@@ -101,6 +103,8 @@ final class BrowserModel {
     private(set) var isRunLogUndoable = false
     var isShowingRunLog = false
     private(set) var lastRun: UndoRecord?
+    /// 마지막으로 만든 빈 파일. lastRun과 둘 중 나중에 한 작업 하나만 되돌린다
+    private(set) var lastEmptyFiles: [EmptyFilePlan.File]?
     /// 강제 종료로 남은 작업 기록 (복구 확인용)
     var pendingRecovery: RenameJournal?
     static var didCheckJournal = false
@@ -1001,7 +1005,16 @@ extension BrowserModel {
         return renameConflicts.order.isEmpty && nameIssues.errors.isEmpty && !makePlan().items.isEmpty
     }
 
-    var canUndoRun: Bool { lastRun != nil && !isRunning }
+    var canUndoRun: Bool { (lastRun != nil || lastEmptyFiles != nil) && !isRunning }
+
+    /// 메뉴·버튼의 되돌리기 이름
+    var undoTitle: String { lastEmptyFiles != nil ? "Undo Add Empty Files" : "Undo Last Rename" }
+
+    /// 실행 로그 제목 줄의 되돌리기 이름
+    var runLogUndoTitle: String {
+        if lastEmptyFiles != nil { return "Undo Add Empty Files" }
+        return lastRun?.plan.isCopy == true ? "Undo Copy" : "Undo Rename"
+    }
 
     /// 실행 계획. 원본 변경이면 새 이름이 지금 이름과 같은 파일은 뺀다 (복사는 같은 이름이어도 복사한다)
     func makePlan() -> RenamePlan {
@@ -1094,6 +1107,7 @@ extension BrowserModel {
     /// 성공: Order·New Name을 비우고(규칙은 유지) Select를 다시 읽어 바뀐 파일을 선택한다
     private func finishSuccessfulRun(_ plan: RenamePlan, snapshot: UndoRecord) {
         lastRun = snapshot
+        lastEmptyFiles = nil
         isRunLogUndoable = true
         let count = plan.items.count
         runLog.append(RenameLogEntry(kind: .info, message: plan.isCopy ? "Copied \(count) files" : "Renamed \(count) files"))
@@ -1111,6 +1125,10 @@ extension BrowserModel {
 
     /// 마지막 실행을 되돌린다. 파일과 Order·New Name을 실행 직전 상태로 돌린다
     func undoRun() async {
+        if let created = lastEmptyFiles, !isRunning {
+            undoEmptyFiles(created)
+            return
+        }
         guard let record = lastRun, !isRunning else { return }
         lastRun = nil
         let executor = RenameExecutor()
@@ -1173,5 +1191,93 @@ extension BrowserModel {
         case .finished(let message):
             return message
         }
+    }
+}
+
+// MARK: - Add Empty Files
+
+extension BrowserModel {
+    /// 지금 폴더에 빈 파일을 만들 수 있는지 (메뉴·버튼)
+    var canAddEmptyFiles: Bool {
+        loadError == nil && !isRunning && renamingURL == nil && !isFolderMissing
+    }
+
+    /// 빈 파일을 만든 뒤 부른다. 목록을 다시 읽고, 고르면 Order 끝에 넣는다 (실제 파일을 넣을 때와 같이 선택·포커스).
+    /// 결과는 이름 바꾸기처럼 실행 로그로 보여주고, 로그 제목 줄에서 바로 되돌릴 수 있다
+    func finishEmptyFiles(_ created: [EmptyFilePlan.File], fill: EmptyFileSpec.Fill, elapsed: Duration, addsToOrder: Bool) {
+        guard !created.isEmpty else { return }
+        lastEmptyFiles = created
+        lastRun = nil
+        reload()
+        let byPath = Dictionary(files.map { ($0.url.standardizedFileURL.path, $0) }, uniquingKeysWith: { first, _ in first })
+        let createdFiles = created.compactMap { byPath[$0.url.standardizedFileURL.path] }
+        if addsToOrder {
+            let before = orderedFiles
+            let ordered = Set(orderedFiles.map(\.url))
+            orderedFiles.append(contentsOf: createdFiles.filter { !ordered.contains($0.url) })
+            markRecentlyAdded(after: before)
+            selection = []
+            focusOrder(selectingAddedSince: before)
+        } else {
+            selection = Set(createdFiles.map(\.url))
+            requestFocus(.select)
+        }
+        let format = { (bytes: Int64) in ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+        let total = created.reduce(Int64(0)) { $0 + $1.size }
+        let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+        runLog = [RenameLogEntry(kind: .info, message: "Create \(created.count) empty files (\(fill.title))")]
+        runLog += created.map {
+            RenameLogEntry(kind: .success, message: $0.url.lastPathComponent, detail: "\(format($0.size)) (\($0.size.formatted()) bytes)")
+        }
+        runLog.append(RenameLogEntry(
+            kind: .info,
+            message: "Created \(created.count) files (\(format(total))) in \(seconds.formatted(.number.precision(.fractionLength(1))))s"
+        ))
+        // 선택을 바꾸면 로그가 닫히므로 마지막에 연다
+        isRunLogUndoable = true
+        isShowingRunLog = true
+        runState = .finished("Created \(created.count) files")
+    }
+
+    /// 만든 빈 파일을 지운다(휴지통, 안 되면 삭제). 그사이 용량이 바뀌었거나 옮겨지거나 지워진 파일은 건너뛴다
+    private func undoEmptyFiles(_ created: [EmptyFilePlan.File]) {
+        lastEmptyFiles = nil
+        isRunLogUndoable = false
+        let fileManager = FileManager.default
+        var removed: Set<URL> = []
+        var log = [RenameLogEntry(kind: .info, message: "Undo add empty files: \(created.count) files")]
+        for file in created {
+            let name = file.url.lastPathComponent
+            let size = (try? file.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+            guard let size else {
+                log.append(RenameLogEntry(kind: .warning, message: "Skipped (moved or deleted): \(name)"))
+                continue
+            }
+            guard Int64(size) == file.size else {
+                log.append(RenameLogEntry(kind: .warning, message: "Skipped (size changed): \(name)"))
+                continue
+            }
+            do {
+                try fileManager.trashItem(at: file.url, resultingItemURL: nil)
+                log.append(RenameLogEntry(kind: .revert, message: name, detail: "Moved to Trash"))
+            } catch {
+                // 휴지통이 없는 볼륨(NFS, SMB 등)
+                do {
+                    try fileManager.removeItem(at: file.url)
+                    log.append(RenameLogEntry(kind: .revert, message: name, detail: "Deleted (Trash isn't available on this volume)"))
+                } catch {
+                    log.append(RenameLogEntry(kind: .warning, message: "Could not remove: \(name)", detail: error.localizedDescription))
+                    continue
+                }
+            }
+            removed.insert(file.url.standardizedFileURL)
+        }
+        orderedFiles.removeAll { removed.contains($0.url.standardizedFileURL) }
+        orderSelection = orderSelection.filter { !removed.contains($0.standardizedFileURL) }
+        reload()
+        log.append(RenameLogEntry(kind: .info, message: "Undo finished"))
+        runLog = log
+        isShowingRunLog = true
+        runState = .finished("Removed \(removed.count) empty files")
     }
 }

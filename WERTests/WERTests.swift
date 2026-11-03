@@ -815,3 +815,101 @@ struct KoreanNameTests {
     }
 }
 
+
+struct EmptyFileSpecTests {
+    private func spec(min: String = "", max: String = "", unit: EmptyFileSpec.Unit = .b, count: String, name: String = "", ext: String = "") -> EmptyFileSpec {
+        var spec = EmptyFileSpec()
+        spec.min = min
+        spec.max = max
+        spec.unit = unit
+        spec.count = count
+        spec.name = name
+        spec.ext = ext
+        return spec
+    }
+
+    @Test func evenSplitIncludesBothEnds() {
+        #expect(spec(min: "0", max: "100", count: "5").sizes == [0, 25, 50, 75, 100])
+        #expect(spec(min: "1", max: "10", unit: .mib, count: "2").sizes == [1_048_576, 10_485_760])
+    }
+
+    @Test func minOnlyMakesSameSizes() {
+        #expect(spec(min: "1.5", unit: .kb, count: "3").sizes == [1500, 1500, 1500])
+    }
+
+    @Test func emptyFieldsUseDefaults() {
+        // Max가 비고 Min도 없으면 10, Count가 비면 1
+        #expect(spec(count: "").sizes == [10])
+        #expect(spec(unit: .mib, count: "2").sizes == [10_485_760, 10_485_760])
+        #expect(spec(max: "5", count: "").sizes == [5])
+        #expect(EmptyFileSpec().fileNames == ["wer-create-10485760"])
+        #expect(spec(max: "3", count: "1", name: "  ").fileNames == ["wer-create-3"])
+    }
+
+    @Test func oneFileIgnoresMin() {
+        #expect(spec(min: "1", max: "9", count: "1").sizes == [9])
+        // Min이 꺼져 있으면 Min 오류도, Min > Max 오류도 보지 않는다
+        #expect(spec(min: "x", max: "9", count: "1").errors.isEmpty)
+        #expect(spec(min: "20", max: "9", count: "1").errors.isEmpty)
+        // 1개에 Max가 비면 Min이 아니라 기본값 10
+        #expect(spec(min: "2", count: "1").sizes == [10])
+    }
+
+    @Test func decimalsRoundDown() {
+        #expect(spec(max: "0.0001", unit: .kib, count: "1").sizes == [0])
+        #expect(spec(max: "1.9999", unit: .kb, count: "1").sizes == [1999])
+    }
+
+    @Test func invalidInputs() {
+        #expect(spec(max: "1.5", unit: .b, count: "1").error(for: .max) != nil)
+        #expect(spec(min: "10", max: "5", count: "2").error(for: .max) != nil)
+        #expect(spec(max: "1e3", count: "1").error(for: .max) != nil)
+        #expect(spec(max: "2", unit: .gib, count: "0").error(for: .count) != nil)
+        #expect(spec(max: "1025", unit: .gib, count: "1").error(for: .max) != nil)
+        #expect(spec(max: "1", count: "1", ext: "a.b").error(for: .ext) != nil)
+        #expect(spec(max: "1", count: "1", name: "a/b").error(for: .name) != nil)
+        #expect(spec(max: "3", count: "abc").sizes == nil)
+    }
+
+    @Test func namesArePaddedBySize() {
+        #expect(spec(min: "5", max: "1000", count: "2", name: "up", ext: "bin").fileNames == ["up-0005.bin", "up-1000.bin"])
+        #expect(spec(max: "7", count: "1").fileNames == ["wer-create-7"])
+    }
+
+    @Test func sameSizesGetSuffix() {
+        #expect(spec(max: "7", count: "2", ext: "dat").fileNames == ["wer-create-7-1.dat", "wer-create-7-2.dat"])
+        #expect(spec(min: "1", max: "2", count: "3").fileNames == ["wer-create-1", "wer-create-2-1", "wer-create-2-2"])
+        // 같은 용량 번호도 자릿수를 맞춘다
+        let names = spec(max: "5", count: "12").fileNames
+        #expect(names?.first == "wer-create-5-01")
+        #expect(names?.last == "wer-create-5-12")
+    }
+
+    @Test func savedSpecDecodesMissingKeys() throws {
+        let decoded = try JSONDecoder().decode(EmptyFileSpec.self, from: Data(#"{"max":"5"}"#.utf8))
+        #expect(decoded.max == "5")
+        #expect(decoded.unit == .mib)
+    }
+
+    @Test func createsSizedFilesAndNeverOverwrites() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "wer-empty-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        for fill in EmptyFileSpec.Fill.allCases {
+            var s = spec(min: "0", max: "3", unit: .mib, count: "3", name: fill.rawValue)
+            s.fill = fill
+            let plan = try #require(s.plan(in: folder))
+            let created = try await EmptyFileCreator.create(plan) { _ in }
+            #expect(created.count == 3)
+            for file in plan.files {
+                let size = try file.url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                #expect(Int64(size ?? -1) == file.size)
+            }
+            // 같은 이름이 있으면 실패하고, 그 전에 만든 파일은 남기지 않는다
+            await #expect(throws: EmptyFileCreator.Failure.self) {
+                _ = try await EmptyFileCreator.create(plan) { _ in }
+            }
+            #expect(await EmptyFileCreator.existing(plan.files.map(\.url)).count == 3)
+        }
+    }
+}

@@ -17,6 +17,7 @@ struct SelectPanel: View {
             PanelHeader(title: "Select", isFocused: model.focusedPane == .select, onSelect: { model.requestFocus(.select) }, onCollapse: onCollapse)
             HStack {
                 Button("Go to Folder") { model.isGoToFolderPresented = true }
+                    .fixedSize()
                 Button("Refresh", systemImage: "arrow.clockwise") { model.reload() }
                     .labelStyle(.iconOnly)
                     .help("Refresh (⌘R)")
@@ -25,11 +26,17 @@ struct SelectPanel: View {
                     .labelStyle(.iconOnly)
                     .background(MenuAnchor { sortMenuAnchor.view = $0 })
                     .help("Sort: \(model.sort.title) (\(model.sort.example)). ⌃⌘S switches")
+                Button("Add Empty Files", systemImage: "doc.badge.plus") { model.isEmptyFilesPresented = true }
+                    .labelStyle(.iconOnly)
+                    .help("Add Empty Files… (⌥⌘N)")
+                    .disabled(!model.canAddEmptyFiles)
                 Spacer()
                 // 선택이 없으면 전체 파일을 추가
                 Button("Add", systemImage: "text.badge.plus") { model.addToOrder() }
                     .help("Add selected files to Order (all files if none selected). ⌘→ adds selected files, ⌥⌘→ adds all")
                     .disabled(model.files.isEmpty)
+                    // 좁아져도 글자를 줄이지 않는다 (최소 폭은 PaneLayout.minSelect)
+                    .fixedSize()
             }
 
             ScrollViewReader { proxy in
