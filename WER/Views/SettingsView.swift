@@ -10,6 +10,7 @@ struct SettingsView: View {
     enum Tab: String {
         case general
         case presets
+        case emptyFiles
     }
 
     /// 설정 창 id. SwiftUI의 Settings 창은 크기를 조정할 수 없어서 일반 창(Window)으로 연다
@@ -27,6 +28,9 @@ struct SettingsView: View {
             PresetsSettingsView()
                 .tabItem { Label("Presets", systemImage: "bookmark") }
                 .tag(Tab.presets.rawValue)
+            EmptyFilesSettingsView()
+                .tabItem { Label("Empty Files", systemImage: "doc.badge.plus") }
+                .tag(Tab.emptyFiles.rawValue)
         }
         // 크기 조정 가능. General은 작아지면 스크롤, Presets는 커지면 목록이 늘어난다
         .frame(minWidth: 520, maxWidth: .infinity, minHeight: 400, maxHeight: .infinity)
@@ -209,6 +213,28 @@ private struct FolderSettingRow: View {
                 return true
             }
         }
+    }
+}
+
+// MARK: - Empty Files
+
+/// Add Empty Files 창을 열 때 채울 기본값. 비워 두면 창에서도 빈 칸으로 시작한다
+private struct EmptyFilesSettingsView: View {
+    @State private var spec = EmptyFileSpec.saved
+    @FocusState private var focus: EmptyFileSpec.Field?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            EmptyFileSpecFields(spec: $spec, focus: $focus)
+            Text("Add Empty Files (⌥⌘N) starts with these values each time. Changes made there are not saved. Files are named <Name>-<size in bytes>.<Ext>. Empty fields use: Name wer-create, Max = Min (or 10), Count 1.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onChange(of: spec) { spec.save() }
     }
 }
 

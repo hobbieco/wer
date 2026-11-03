@@ -66,6 +66,10 @@ extension BrowserModel {
             return "No earlier rule to go back to"
         case ("y", [.command]):
             return playbackUnavailableMessage
+        case ("n", [.command, .option]):
+            if isRunning { return "Wait until the current run finishes" }
+            if renamingURL != nil { return nil }
+            return "Can't create files in this folder"
         case ("z", [.command, .option]):
             return isRunning ? "Wait until the current run finishes" : "Nothing to undo"
         default:

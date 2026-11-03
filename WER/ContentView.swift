@@ -96,7 +96,7 @@ struct ContentView: View {
                         Button("Undo", systemImage: "arrow.uturn.backward") { Task { await model.undoRun() } }
                             .buttonStyle(.borderless)
                             .fixedSize()
-                            .help("Undo the last rename")
+                            .help(model.undoTitle)
                     }
                 }
                 .frame(width: 260, alignment: .trailing)
@@ -105,7 +105,7 @@ struct ContentView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
         }
-        .frame(minWidth: PaneLayout.minWidth(isSelectCollapsed: isSelectCollapsed), minHeight: 500)
+        .frame(minWidth: PaneLayout.minWidth(isSelectCollapsed: isSelectCollapsed), minHeight: PaneLayout.minHeight)
         .onChange(of: isSelectCollapsed, initial: true) { model.isSelectCollapsed = isSelectCollapsed }
         // 설정에서 폴더 먼저 정렬을 바꾸면 바로 다시 정렬한다
         .onChange(of: sortsFoldersFirst) { model.reload() }
@@ -173,6 +173,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $model.isGoToFolderPresented) {
             GoToFolderSheet(initialFolder: model.goToFolderStart) { model.requestGo(to: $0) }
+        }
+        .sheet(isPresented: $model.isEmptyFilesPresented) {
+            EmptyFilesSheet(model: model)
         }
         .sheet(isPresented: $model.isCopyFolderPresented) {
             GoToFolderSheet(

@@ -8,14 +8,18 @@ import SwiftUI
 /// Select | Order | Rename 칸 너비 계산. Select와 Rename 폭을 pt로 저장하고 Order가 나머지를 갖는다.
 /// 비율로 저장하면 끄기를 마칠 때 비율로 바꾸는 계산 때문에 경계가 튀어서, 폭을 그대로 쓴다. 칸마다 최소 폭을 지킨다.
 struct PaneLayout {
-    static let defaultSelectWidth: Double = 300
+    static let defaultSelectWidth: Double = 320
     static let defaultRenameWidth: Double = 440
 
-    static let minSelect: CGFloat = 280
+    // 상단 버튼 줄(Go to Folder, 아이콘 3개, Add)이 잘리지 않는 폭
+    static let minSelect: CGFloat = 320
     static let minOrder: CGFloat = 480
     // 입력칸이 고정폭 글꼴이라 조금 넓게
     static let minRename: CGFloat = 420
     static let collapsedWidth: CGFloat = 28
+    /// 창 최소 높이. 최소 폭의 Rename 칸에서 Preview가 거의 정사각형이 되는 높이
+    /// (Preview 위 Rename 설정·경로 줄 약 355pt + 아래 상태 바 약 35pt + Preview 약 350pt (실제로 보면 이 정도가 정사각형에 가깝다))
+    static let minHeight: CGFloat = 740
     /// 칸 사이 경계선 2개의 폭
     static let handlesWidth: CGFloat = 2
 

@@ -402,17 +402,6 @@ private extension View {
         }
     }
 
-    /// 비활성 입력칸을 회색 배경으로 덮어 활성 칸과 구분한다
-    func disabledBackground(_ isDisabled: Bool) -> some View {
-        overlay {
-            if isDisabled {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.gray.opacity(0.25))
-                    .allowsHitTesting(false)
-            }
-        }
-    }
-
     /// 값 오류가 있는 입력칸에 빨간 테두리 (빈 값은 글자가 없어 테두리로 표시)
     /// 형식 오류는 빨간 테두리, 빈 칸(채워야 함)은 주황 테두리. 둘 다면 빨강
     func invalidBorder(_ isInvalid: Bool, needsInput: Bool = false) -> some View {
@@ -428,4 +417,17 @@ private extension View {
 /// 칸별 메뉴 위치 뷰. 화면을 다시 그릴 필요가 없어 관찰하지 않는 객체에 담는다
 private final class MenuAnchors {
     var views: [NameToken.ID: NSView] = [:]
+}
+
+extension View {
+    /// 비활성 입력칸을 회색 배경으로 덮어 활성 칸과 구분한다 (Rename 칸, Add Empty Files의 Min)
+    func disabledBackground(_ isDisabled: Bool) -> some View {
+        overlay {
+            if isDisabled {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.gray.opacity(0.25))
+                    .allowsHitTesting(false)
+            }
+        }
+    }
 }

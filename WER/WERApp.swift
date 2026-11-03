@@ -68,10 +68,15 @@ private struct FolderCommands: Commands {
             Button("Enclosing Folder") { model?.openEnclosingFolder() }
                 .keyboardShortcut(.upArrow)
                 .disabled(model?.shortcutPane != .select || model?.canOpenEnclosingFolder != true)
+            Divider()
+            // 업로드 용량 제한 테스트용 파일을 지금 폴더에 만든다
+            Button("Add Empty Files…") { model?.isEmptyFilesPresented = true }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+                .disabled(model?.canAddEmptyFiles != true)
         }
         // ⌘Z는 입력칸의 실행 취소에 쓰여서 별도 단축키를 둔다
         CommandGroup(after: .undoRedo) {
-            Button("Undo Last Rename") {
+            Button(model?.undoTitle ?? "Undo Last Rename") {
                 if let model { Task { await model.undoRun() } }
             }
             .keyboardShortcut("z", modifiers: [.command, .option])
