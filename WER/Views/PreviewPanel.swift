@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 /// 동영상·오디오는 재생 컨트롤바가 늘 보이는 자체 플레이어로, 문서는 썸네일을 먼저 보여준다.
 struct PreviewPanel: View {
     let selection: Set<URL>
-    /// Space·⌘Y 재생/일시정지 요청 (BrowserModel.playbackToggleRequest)
+    /// Space 재생/일시정지 요청 (BrowserModel.playbackToggleRequest)
     let playbackToggleRequest: UUID?
     @AppStorage(AppSettings.previewAutoplaysMediaKey) private var autoplaysMedia = false
     @AppStorage(AppSettings.previewEnabledKey) private var isEnabled = true
@@ -57,7 +57,12 @@ struct PreviewPanel: View {
                         Color.clear
                     } else if let kind = PreviewMediaKind(url) {
                         // 파일이 바뀌면 플레이어를 새로 만든다
-                        MediaPlayerView(url: url, kind: kind, autoplays: autoplaysMedia, playbackToggleRequest: playbackToggleRequest)
+                        // Quick Look이 열려 있으면 멈추고 자동 재생하지 않는다 (소리가 겹치지 않게)
+                        MediaPlayerView(
+                            url: url, kind: kind, autoplays: autoplaysMedia,
+                            playbackToggleRequest: playbackToggleRequest,
+                            isHeld: QuickLook.shared.isVisible
+                        )
                             .id(url)
                     } else if DocumentPreviewView.isImage(url) {
                         QuickLookView(url: url)
@@ -156,6 +161,8 @@ private struct MediaPlayerView: View {
     let kind: PreviewMediaKind
     let autoplays: Bool
     let playbackToggleRequest: UUID?
+    /// 다른 곳(Quick Look)에서 재생 중이라 멈춰 둔다
+    let isHeld: Bool
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -203,6 +210,9 @@ private struct MediaPlayerView: View {
         .task { await run() }
         .onDisappear { player?.pause() }
         .onChange(of: playbackToggleRequest) { togglePlay() }
+        .onChange(of: isHeld) { _, held in
+            if held, isPlaying { togglePlay() }
+        }
         .onChange(of: volume) { player?.volume = Float(volume) }
         .onChange(of: isMuted) { player?.isMuted = isMuted }
     }
@@ -253,7 +263,7 @@ private struct MediaPlayerView: View {
         player.volume = Float(volume)
         player.isMuted = isMuted
         self.player = player
-        if autoplays {
+        if autoplays, !isHeld {
             player.play()
             isPlaying = true
         }

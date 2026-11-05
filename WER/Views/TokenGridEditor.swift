@@ -14,7 +14,7 @@ struct TokenGridEditor: View {
     var onFocusChange: ((Bool) -> Void)?
     /// ⌘1~6 요청. 바뀌면 그 칸의 종류 드롭다운을 연다 (Rename 칸만)
     var kindMenuRequest: BrowserModel.KindMenuRequest?
-    /// ⌘T로 Rename 칸에 온 요청. 바뀌면 마지막으로 쓰던 입력칸(없으면 첫 활성 값 칸)에 포커스를 준다
+    /// ⌘T로 Rename 칸에 온 요청. 바뀌면 1번 칸의 종류 드롭다운에 포커스를 준다 (입력칸은 None이면 꺼져 있어서)
     var focusRequest: UUID?
     /// Order 파일의 확장자별 개수. 확장자 규칙 줄의 구분자 자리에 일치 파일 수로 보여준다 (설정의 프리셋 편집은 nil)
     var extensionCounts: [String: Int]?
@@ -29,10 +29,9 @@ struct TokenGridEditor: View {
     @State private var dropTargetSlot: Int?
     @State private var gridHeight: CGFloat = 0
     @FocusState private var focusedField: FieldID?
-    @State private var lastFocusedField: FieldID?
     @State private var menuAnchors = MenuAnchors()
 
-    /// 입력칸 구분: 칸 id와 열(0 값, 1 두 번째 칸, 2 구분자)
+    /// 입력칸 구분: 칸 id와 열(-1 종류 드롭다운, 0 값, 1 두 번째 칸, 2 구분자)
     private struct FieldID: Hashable {
         let token: NameToken.ID
         let column: Int
@@ -65,6 +64,13 @@ struct TokenGridEditor: View {
                     }
                     // "Change Ext", "Remove Ext"가 줄지 않고 들어가는 폭
                     .frame(width: 112)
+                    // 키보드 탐색 설정과 관계없이 포커스를 받는다. Space·Return으로 메뉴를 연다
+                    .focusable()
+                    .focused($focusedField, equals: FieldID(token: token.id, column: -1))
+                    .onKeyPress(keys: [.space, .return]) { _ in
+                        openKindMenu(slot: slot)
+                        return .handled
+                    }
                     .accessibilityLabel("Slot \(slot + 1) type")
                     .accessibilityValue(Self.title(for: token.kind))
                     // ⌘1~6 메뉴를 띄울 자리
@@ -146,7 +152,6 @@ struct TokenGridEditor: View {
         }
         .labelsHidden()
         .onChange(of: focusedField) { _, field in
-            if let field { lastFocusedField = field }
             onFocusChange?(field != nil)
         }
         // 커서가 있던 칸이 비활성이 되면(None으로 바꿈 등) 포커스를 비운다
@@ -154,12 +159,8 @@ struct TokenGridEditor: View {
         .onChange(of: usesSeparator) { clearDisabledFocus() }
         .onChange(of: omitsLastSeparator) { clearDisabledFocus() }
         .onChange(of: focusRequest) { _, request in
-            guard request != nil else { return }
-            if let last = lastFocusedField, isEnabled(last) {
-                focusedField = last
-            } else if let first = tokens.first(where: { $0.kind != .none }) {
-                focusedField = FieldID(token: first.id, column: 0)
-            }
+            guard request != nil, let first = tokens.first else { return }
+            focusedField = FieldID(token: first.id, column: -1)
         }
         .onChange(of: kindMenuRequest) { _, request in
             if let request { openKindMenu(slot: request.slot) }
@@ -348,6 +349,7 @@ struct TokenGridEditor: View {
         guard let slot = tokens.firstIndex(where: { $0.id == field.token }) else { return false }
         let kind = tokens[slot].kind
         switch field.column {
+        case -1: return true
         case 0: return kind != .none
         case 1: return kind != .none && kind != .removeExtension && kind != .addExtension
         default: return kind.isNamePart && usesSeparator && !isOmittedSeparator(slot)

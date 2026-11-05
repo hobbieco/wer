@@ -48,7 +48,7 @@ extension BrowserModel {
         case ("←", [.command]) where shortcutPane == .order:
             return orderedFiles.isEmpty ? "Order is empty" : "Select files in Order to remove (⌥⌘← removes all)"
         case ("←", [.command]) where shortcutPane == .select:
-            return "⌘← removes files selected in Order (⌥⌘← removes all)"
+            return selection.isEmpty ? "Select files to remove from Order (⌥⌘← removes all)" : "Selected files aren't in Order"
         case ("←", [.command, .option]) where isListFocused:
             return "Order is empty"
         case ("↑", [.command]), ("↓", [.command]), ("↑", [.command, .option]), ("↓", [.command, .option]):

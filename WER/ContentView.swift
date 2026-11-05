@@ -49,6 +49,8 @@ struct ContentView: View {
                     }
                     .frame(width: widths.select)
                     .clipped()
+                    // Tab 이동을 칸 안에서 먼저 돌게 칸마다 묶는다 (기본은 창 전체를 위에서 아래로)
+                    .focusSection()
                     if isSelectCollapsed {
                         Divider()
                     } else {
@@ -57,10 +59,12 @@ struct ContentView: View {
                     OrderPanel(model: model)
                         .frame(width: widths.order)
                         .clipped()
+                        .focusSection()
                     SplitHandle { dragOrderRename(by: $0, total: total) } onEnded: { endDrag() }
                     RenamePanel(model: model)
                         .frame(width: widths.rename)
                         .clipped()
+                        .focusSection()
                 }
             }
 
@@ -130,6 +134,8 @@ struct ContentView: View {
         }
         // Order 작업이 있으면 창을 닫거나 종료할 때 확인한다
         .background(WindowCloseGuard(model: model))
+        // Quick Look이 열려 있으면 목록 선택을 따라간다
+        .onChange(of: model.previewSelection) { QuickLook.shared.selectionChanged(in: model) }
         .onAppear { BrowserModel.open.add(model) }
         .onDisappear { BrowserModel.open.remove(model) }
         // 이전 실행이 중간에 끊겼으면 복구할지 묻는다

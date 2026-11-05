@@ -60,6 +60,8 @@ struct WindowCloseGuard: NSViewRepresentable {
         let model: BrowserModel
         // responds·forwardingTarget는 nonisolated라 거기서도 읽는다 (AppKit은 메인 스레드에서만 부른다)
         nonisolated(unsafe) weak var original: NSWindowDelegate?
+        /// 감싼 창 (Quick Look이 ↑↓를 이 창의 목록으로 넘긴다)
+        private(set) weak var window: NSWindow?
         /// 확인 창에서 Close를 누른 뒤 다시 닫을 때는 묻지 않는다
         private var isConfirmed = false
 
@@ -69,6 +71,7 @@ struct WindowCloseGuard: NSViewRepresentable {
 
         func install(on window: NSWindow?) {
             guard let window, window.delegate !== self else { return }
+            self.window = window
             original = window.delegate
             window.delegate = self
         }

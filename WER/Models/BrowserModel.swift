@@ -78,12 +78,25 @@ final class BrowserModel {
         renamingURL == nil ? focusedPane : nil
     }
 
-    /// 칸의 포커스가 바뀔 때 부른다. 다른 칸이 먼저 포커스를 받았으면 그대로 둔다
-    func setFocus(_ pane: Pane, _ isFocused: Bool) {
-        if isFocused {
-            focusedPane = pane
-        } else if focusedPane == pane {
-            focusedPane = nil
+    /// 마지막으로 포커스를 받은 칸. 다른 칸에서 넘어왔는지 판단한다 (창을 다시 앞으로 가져온 경우는 제외)
+    private var lastFocusedPane: Pane?
+
+    /// 칸의 포커스가 바뀔 때 부른다. 다른 칸이 먼저 포커스를 받았으면 그대로 둔다.
+    /// 다른 칸에서 넘어왔으면(⌘T, Tab 등) 목록에서 이어 볼 파일을 선택하고, 선택을 바꿨으면 true (스크롤용)
+    @discardableResult
+    func setFocus(_ pane: Pane, _ isFocused: Bool) -> Bool {
+        guard isFocused else {
+            if focusedPane == pane { focusedPane = nil }
+            return false
+        }
+        let arrived = lastFocusedPane != nil && lastFocusedPane != pane
+        lastFocusedPane = pane
+        focusedPane = pane
+        guard arrived else { return false }
+        switch pane {
+        case .select: return selectOnArrivingAtSelect()
+        case .order: return selectOnArrivingAtOrder()
+        case .rename: return false
         }
     }
 
@@ -289,7 +302,7 @@ final class BrowserModel {
         presetMenuRequest = UUID()
     }
 
-    /// Space·⌘Y로 미리보기 미디어를 재생/일시정지해 달라는 요청. Preview의 플레이어가 받아 처리한다
+    /// Space로 미리보기 미디어를 재생/일시정지해 달라는 요청. Preview의 플레이어가 받아 처리한다
     private(set) var playbackToggleRequest: UUID?
 
     /// 미리보기에 동영상·오디오 하나가 보이고 있을 때
@@ -660,15 +673,16 @@ final class BrowserModel {
 
     // MARK: - Order
 
-    /// 대상 파일을 Select 순서에 맞춰 정렬 목록 사이에 넣고 Select 선택을 해제한다. 이미 있는 파일은 건너뛴다.
-    func addToOrder() {
+    /// 대상 파일을 Select 순서에 맞춰 정렬 목록 사이에 넣는다. 이미 있는 파일은 건너뛴다.
+    /// keepsSelection이 false면 Select 선택을 해제한다 (⌘→는 선택을 남겨 목록 위치를 유지한다)
+    func addToOrder(keepsSelection: Bool = false) {
         let before = orderedFiles
         orderedFiles = OrderMover.insert(targetFiles, into: orderedFiles, reference: items)
         markRecentlyAdded(after: before)
-        selection = []
+        if !keepsSelection { selection = [] }
     }
 
-    /// 키보드로 추가한 뒤(⌘→, ⌥⌘→) 이어서 순서를 맞출 수 있도록, 추가한 파일을 선택하고 Order로 포커스를 옮긴다
+    /// 모두 추가(⌥⌘→)나 빈 파일 생성 뒤 이어서 순서를 맞출 수 있도록, 추가한 파일을 선택하고 Order로 포커스를 옮긴다
     func focusOrder(selectingAddedSince before: [FileItem]) {
         let existing = Set(before.map(\.url))
         let added = orderedFiles.map(\.url).filter { !existing.contains($0) }
@@ -696,22 +710,27 @@ final class BrowserModel {
         if focusedPane == .order { requestFocus(.select) }
     }
 
-    /// 기존 목록 사이에 추가한 파일. 잠시 깜빡여 위치를 알려준다
-    private(set) var recentlyAdded: Set<URL> = []
-    private var recentlyAddedTask: Task<Void, Never>?
+    /// Order에 추가한 파일과 추가 회차. 잠시 깜빡여 위치를 알려주고, 회차마다 색을 바꾼다
+    private(set) var recentlyAdded: [URL: Int] = [:]
+    /// 다음 추가 회차. 깜빡이는 파일이 모두 사라지면 0으로 되돌려 첫 색부터 쓴다
+    private var nextAddBatch = 0
 
-    /// 기존 목록이 있었을 때만 표시한다. 3초 뒤 지운다
+    /// 빈 목록에 처음 추가할 때도 표시한다. 추가할 때마다 각각 3초 뒤 지운다
     private func markRecentlyAdded(after before: [FileItem]) {
-        guard !before.isEmpty else { return }
         let existing = Set(before.map(\.url))
         let added = Set(orderedFiles.map(\.url)).subtracting(existing)
         guard !added.isEmpty else { return }
-        recentlyAddedTask?.cancel()
-        recentlyAdded = added
-        recentlyAddedTask = Task { [weak self] in
+        if recentlyAdded.isEmpty { nextAddBatch = 0 }
+        let batch = nextAddBatch
+        nextAddBatch += 1
+        for url in added { recentlyAdded[url] = batch }
+        Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled else { return }
-            self?.recentlyAdded = []
+            guard let self else { return }
+            // 그 사이 다시 추가된 파일은 새 회차의 타이머가 지운다
+            for url in added where self.recentlyAdded[url] == batch {
+                self.recentlyAdded[url] = nil
+            }
         }
     }
 
@@ -773,6 +792,34 @@ final class BrowserModel {
         orderedFiles.removeAll { removing.contains($0.url) }
         orderSelection.subtract(removing)
         return true
+    }
+
+    /// 다른 칸에서 Select로 왔을 때. Select 선택이 없으면 Order에서 고른 파일(이 폴더에 있는 것), 없으면 첫 항목을 선택한다.
+    /// (Select를 고르면 Order 선택은 지워진다)
+    private func selectOnArrivingAtSelect() -> Bool {
+        guard selection.isEmpty, let first = items.first else { return false }
+        let matched = Set(items.map(\.url)).intersection(orderSelection)
+        selection = matched.isEmpty ? [first.url] : matched
+        return true
+    }
+
+    /// 다른 칸에서 Order로 왔을 때. Order 선택이 없으면 Select에서 고른 파일(Order에 있는 것), 없으면 첫 파일을 선택한다.
+    /// (Order를 고르면 Select 선택은 지워진다)
+    private func selectOnArrivingAtOrder() -> Bool {
+        guard orderSelection.isEmpty, let first = orderedFiles.first else { return false }
+        let matched = Set(orderedFiles.map(\.url)).intersection(selection)
+        orderSelection = matched.isEmpty ? [first.url] : matched
+        return true
+    }
+
+    /// Select에서 고른 파일 중 Order에 있는 것이 있는지 (⌘←)
+    var canRemoveSelectionFromOrder: Bool {
+        orderedFiles.contains { selection.contains($0.url) }
+    }
+
+    /// Select에서 고른 파일을 Order에서 뺀다 (⌘←). Select 선택은 그대로 둔다
+    func removeSelectionFromOrder() {
+        _ = removeFromOrder(Array(selection))
     }
 
     /// 선택한 파일을 정렬 목록에서 뺀다. 선택이 없으면 목록을 비운다.

@@ -13,6 +13,8 @@ struct WERApp: App {
     init() {
         // ⌘ 단축키를 메뉴에 먼저 보낸다 (목록이 가져가는 키, 한글 입력 상태)
         KeyEquivalentRouter.install()
+        // 화면을 채운 창을 다른 모니터로 옮기면 그 화면에 맞게 다시 채운다
+        WindowFillKeeper.install()
         // 창 탭은 쓰지 않는다 (View 메뉴의 Show Tab Bar 등을 없앤다)
         NSWindow.allowsAutomaticWindowTabbing = false
         AppSettings.migrateFolderModes()
@@ -67,7 +69,8 @@ private struct FolderCommands: Commands {
             // Order에 파일이 있으면 이동하지 않고 상태 바에 안내한다
             Button("Enclosing Folder") { model?.openEnclosingFolder() }
                 .keyboardShortcut(.upArrow)
-                .disabled(model?.shortcutPane != .select || model?.canOpenEnclosingFolder != true)
+                // Quick Look이 열린 동안에는 폴더를 옮기지 않는다
+                .disabled(model?.shortcutPane != .select || model?.canOpenEnclosingFolder != true || QuickLook.shared.isVisible)
             Divider()
             // 업로드 용량 제한 테스트용 파일을 지금 폴더에 만든다
             Button("Add Empty Files…") { model?.isEmptyFilesPresented = true }
@@ -107,9 +110,12 @@ private struct FolderCommands: Commands {
             })
             .keyboardShortcut(".", modifiers: [.command, .shift])
             .disabled(model == nil)
-            // 목록에서는 Space로도 된다. ⌘Y는 입력칸에 포커스가 있을 때도 동작한다
-            Button("Play/Pause Preview") { model?.togglePreviewPlayback() }
+            // Finder처럼 ⌘Y로 Quick Look을 열고 닫는다. 열린 동안에는 Quick Look 창이 키 창이라 model이 nil일 수 있다
+            Button("Quick Look") { QuickLook.shared.toggle(for: model) }
                 .keyboardShortcut("y")
+                .disabled(!QuickLook.shared.isVisible && model?.previewSelection.isEmpty != false)
+            // 단축키는 목록의 Space
+            Button("Play/Pause Preview") { model?.togglePreviewPlayback() }
                 .disabled(model?.canTogglePreviewPlayback != true)
             Divider()
             // 접힌 Select 칸은 건너뛴다
@@ -134,12 +140,8 @@ private struct OrderCommands: Commands {
 
     var body: some Commands {
         CommandMenu("Order") {
-            Button("Add to Order") {
-                guard let model else { return }
-                let before = model.orderedFiles
-                model.addToOrder()
-                model.focusOrder(selectingAddedSince: before)
-            }
+            // 이어서 다른 파일을 고를 수 있도록 포커스와 선택은 Select에 그대로 둔다
+            Button("Add to Order") { model?.addToOrder(keepsSelection: true) }
                 .keyboardShortcut(.rightArrow)
                 .disabled(model?.shortcutPane != .select || model?.hasSelectedFiles != true)
             // Select의 전체 파일을 Order에 넣는다 (화살표는 파일이 움직이는 방향)
@@ -151,9 +153,17 @@ private struct OrderCommands: Commands {
             }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
                 .disabled(!isListFocused || model?.canAddAllToOrder != true)
-            Button("Remove from Order") { model?.removeFromOrder() }
+            // Select에서는 고른 파일 중 Order에 있는 것을 뺀다 (포커스와 선택은 Select에 그대로)
+            Button("Remove from Order") {
+                guard let model else { return }
+                if model.shortcutPane == .select {
+                    model.removeSelectionFromOrder()
+                } else {
+                    model.removeFromOrder()
+                }
+            }
                 .keyboardShortcut(.leftArrow)
-                .disabled(!canChangeOrderSelection)
+                .disabled(!canChangeOrderSelection && !(model?.shortcutPane == .select && model?.canRemoveSelectionFromOrder == true))
             // Order를 전부 비운다
             Button("Remove All from Order") { model?.removeAllFromOrder() }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])

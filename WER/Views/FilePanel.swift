@@ -61,7 +61,12 @@ struct SelectPanel: View {
                 .focused($isListFocused)
                 .defaultFocus($isListFocused, true)
                 .onAppear { isListFocused = true }
-                .onChange(of: isListFocused, initial: true) { model.setFocus(.select, isListFocused) }
+                .onChange(of: isListFocused, initial: true) {
+                    // 다른 칸에서 넘어와 선택을 정했으면 그 파일이 보이게 한다
+                    guard model.setFocus(.select, isListFocused),
+                          let target = model.items.first(where: { model.selection.contains($0.url) }) else { return }
+                    proxy.scrollTo(target.url, anchor: .center)
+                }
                 .onChange(of: model.focusRequest) { _, request in
                     if request?.pane == .select { isListFocused = true }
                 }
@@ -71,19 +76,24 @@ struct SelectPanel: View {
                 }
                 // Finder 칸 보기처럼 →는 선택한 폴더로 들어가고, ←는 상위 폴더로 나온다 (Order가 비어 있을 때만).
                 // onKeyPress는 ⌘·⌥가 붙은 화살표도 받아서, 보조 키 없이 누른 경우만 처리한다
+                // Quick Look이 열린 동안에는 폴더를 옮기지 않는다
                 .onKeyPress(keys: [.rightArrow]) { press in
                     // 이름을 고치는 중이면 입력칸의 커서 이동
                     guard model.renamingURL == nil, press.modifiers.isDisjoint(with: Self.shortcutModifiers) else { return .ignored }
+                    if QuickLook.shared.isVisible { return .handled }
                     return model.enterSelectedFolder() ? .handled : .ignored
                 }
                 .onKeyPress(keys: [.leftArrow]) { press in
                     guard model.renamingURL == nil, press.modifiers.isDisjoint(with: Self.shortcutModifiers) else { return .ignored }
+                    if QuickLook.shared.isVisible { return .handled }
                     model.openEnclosingFolder()
                     return .handled
                 }
-                // Space: 미리보기 미디어 재생/일시정지 (이름을 고치는 중이면 공백 입력)
+                // Space: 미리보기 미디어 재생/일시정지 (이름을 고치는 중이면 공백 입력).
+                // Quick Look이 열린 동안에는 뒤의 미리보기가 함께 재생되지 않게 무시한다
                 .onKeyPress(keys: [.space]) { press in
                     guard model.renamingURL == nil, press.modifiers.isDisjoint(with: Self.shortcutModifiers) else { return .ignored }
+                    if QuickLook.shared.isVisible { return .handled }
                     model.togglePreviewPlayback()
                     return .handled
                 }
@@ -325,7 +335,7 @@ struct OrderPanel: View {
                         FileRow(item: row.item, highlights: row.highlights)
                             // Select에서 선택한 파일이 이미 목록에 있으면 약하게 강조
                             .softCellHighlight(row.isHighlighted)
-                            .blinkCell(row.isRecentlyAdded)
+                            .blinkCell(row.addBatch)
                     }
                     TableColumn("New Name") { row in
                         HStack(spacing: 4) {
@@ -343,7 +353,7 @@ struct OrderPanel: View {
                                 .foregroundStyle(row.isConflict ? .red : .primary)
                         }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .blinkCell(row.isRecentlyAdded)
+                            .blinkCell(row.addBatch)
                     }
                 } rows: {
                     ForEach(orderRows) { row in
@@ -358,9 +368,15 @@ struct OrderPanel: View {
                     }
                 }
                 .focused($isTableFocused)
-                .onChange(of: isTableFocused) { model.setFocus(.order, isTableFocused) }
-                // Space: 미리보기 미디어 재생/일시정지
+                .onChange(of: isTableFocused) {
+                    // 다른 칸에서 넘어와 선택을 정했으면 그 파일이 보이게 한다
+                    guard model.setFocus(.order, isTableFocused),
+                          let target = model.orderedFiles.first(where: { model.orderSelection.contains($0.url) }) else { return }
+                    proxy.scrollTo(target.url, anchor: .center)
+                }
+                // Space: 미리보기 미디어 재생/일시정지 (Quick Look이 열린 동안에는 무시)
                 .onKeyPress(.space) {
+                    if QuickLook.shared.isVisible { return .handled }
                     model.togglePreviewPlayback()
                     return .handled
                 }
@@ -380,9 +396,10 @@ struct OrderPanel: View {
                     }
                     return true
                 }
-                .onChange(of: model.recentlyAdded) {
-                    // 방금 추가한 파일 중 가장 위에 있는 것으로 스크롤
-                    guard let target = model.orderedFiles.first(where: { model.recentlyAdded.contains($0.url) }) else { return }
+                .onChange(of: model.recentlyAdded) { old, new in
+                    // 방금 추가한 파일 중 가장 위에 있는 것으로 스크롤 (깜빡임이 끝나 빠질 때는 무시)
+                    let fresh: Set<URL> = Set(new.keys.filter { new[$0] != old[$0] })
+                    guard let target = model.orderedFiles.first(where: { fresh.contains($0.url) }) else { return }
                     withAnimation {
                         proxy.scrollTo(target.url, anchor: .center)
                     }
@@ -411,7 +428,7 @@ struct OrderPanel: View {
                 isHighlighted: model.selection.contains(item.url),
                 highlights: model.regexHighlights[item.url] ?? [],
                 newNameHighlights: model.newNameHighlights[item.url] ?? [],
-                isRecentlyAdded: model.recentlyAdded.contains(item.url)
+                addBatch: model.recentlyAdded[item.url]
             )
         }
     }
@@ -452,7 +469,8 @@ struct OrderRow: Identifiable, Hashable {
     let isHighlighted: Bool
     let highlights: [NameHighlight]
     let newNameHighlights: [NameHighlight]
-    let isRecentlyAdded: Bool
+    /// 방금 추가된 회차. 아니면 nil
+    let addBatch: Int?
 
     var id: URL { item.url }
 }
@@ -526,11 +544,11 @@ extension View {
 }
 
 extension View {
-    /// 셀 배경을 노란색으로 깜빡인다 (방금 추가한 행 표시)
-    func blinkCell(_ isOn: Bool) -> some View {
+    /// 셀 배경을 깜빡인다 (방금 추가한 행 표시). 연속으로 추가하면 회차마다 색을 바꾼다
+    func blinkCell(_ batch: Int?) -> some View {
         background {
-            if isOn {
-                Color.yellow
+            if let batch {
+                BlinkPalette.color(for: batch)
                     .padding(.horizontal, -8)
                     .padding(.vertical, -4)
                     .phaseAnimator([0.0, 0.45]) { content, opacity in
@@ -538,6 +556,8 @@ extension View {
                     } animation: { _ in
                         .easeInOut(duration: 0.5)
                     }
+                    // 회차가 바뀌면 새 색으로 처음부터 깜빡인다
+                    .id(batch)
             }
         }
     }
@@ -551,6 +571,15 @@ extension View {
                     .padding(.horizontal, -8)
                     .padding(.vertical, -4)
             }
+    }
+}
+
+/// 추가 회차별 깜빡임 색. 첫 회차는 노란색
+enum BlinkPalette {
+    static let colors: [Color] = [.yellow, .cyan, .pink, .green, .orange, .purple]
+
+    static func color(for batch: Int) -> Color {
+        colors[batch % colors.count]
     }
 }
 
