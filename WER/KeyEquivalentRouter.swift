@@ -65,3 +65,30 @@ enum KeyEquivalentRouter {
         return String(utf16CodeUnits: characters, count: length)
     }
 }
+
+/// 미리보기 재생 중에만 조합키 없는 방향키를 재생 조절로 쓴다. ←→ 10초 앞뒤로, ↑↓ 음량.
+/// 멈춰 있으면 목록 이동 등 원래 동작으로 흘려보낸다. 입력칸에 커서가 있거나 시트·다른 창이 앞에 있으면 건드리지 않는다
+enum PlaybackKeyRouter {
+    static func install() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            handle(event) ? nil : event
+        }
+    }
+
+    private static func handle(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+              [kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow].contains(Int(event.keyCode)),
+              let model = BrowserModel.active, model.isPreviewPlaying,
+              let window = event.window, window.isKeyWindow, window.attachedSheet == nil, !(window is NSPanel),
+              // 입력칸(필드 편집기)에서는 커서 이동
+              !(window.firstResponder is NSText)
+        else { return false }
+        switch Int(event.keyCode) {
+        case kVK_LeftArrow: model.seekPreview(forward: false)
+        case kVK_RightArrow: model.seekPreview(forward: true)
+        case kVK_UpArrow: model.changePreviewVolume(up: true)
+        default: model.changePreviewVolume(up: false)
+        }
+        return true
+    }
+}

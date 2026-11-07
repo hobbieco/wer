@@ -18,6 +18,7 @@ struct RenamePanel: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 PanelHeader(title: "Rename", isFocused: model.focusedPane == .rename, onSelect: { model.requestFocus(.rename) })
+                // 아래 구분자 입력칸·Apply 버튼 끝과 맞춰 여백을 두지 않는다
                 presetsMenu
             }
             TokenGridEditor(
@@ -28,7 +29,8 @@ struct RenamePanel: View {
                 kindMenuRequest: model.kindMenuRequest,
                 focusRequest: model.focusRequest?.pane == .rename ? model.focusRequest?.id : nil,
                 extensionCounts: RenameSettings.extensionCounts(of: model.orderedFiles.map(\.name)),
-                onFileDrop: { model.dropFromOutside($0, addsToOrder: false) }
+                onFileDrop: { model.dropFromOutside($0, addsToOrder: false) },
+                showsInputGuide: true
             )
 
             HStack {
@@ -63,11 +65,15 @@ struct RenamePanel: View {
                 Spacer()
                 // 확인 창을 거쳐 실행한다
                 Button { model.requestRun() } label: {
+                    // 최소 폭에서도 글자가 잘리지 않게 글자 폭에 맞춘다
                     Label("Run Rename", systemImage: "play.fill")
-                        .frame(width: actionButtonWidth)
                 }
+                .fixedSize()
                 .disabled(!model.canRun)
-                .help(model.canRun ? "Rename files in Order" : "Apply first, and fix files marked red")
+                .help(model.canRun ? "Rename files in Order"
+                    : model.appliedSettings?.usesMediaMetadata == true && !model.pendingMediaURLs.isEmpty
+                        ? "Reading taken dates (\(model.mediaProgress?.done ?? 0)/\(model.mediaProgress?.total ?? 0))"
+                        : "Apply first, and fix files marked red")
             }
             if model.renameSettings.isCopy {
                 Text(copyDestinationText)
@@ -91,14 +97,27 @@ struct RenamePanel: View {
                     model.isShowingRunLog = false
                 }
             } else {
-                PreviewPanel(selection: model.previewSelection, playbackToggleRequest: model.playbackToggleRequest)
+                PreviewPanel(
+                    selection: model.previewSelection,
+                    playbackToggleRequest: model.playbackToggleRequest,
+                    isFileInfoShown: model.isFileInfoShown,
+                    // 여러 개 선택 문구와 미리보기를 끈 상태의 파일 정보에도 쓴다
+                    fileInfoEntries: model.previewSelection.isEmpty ? [] : model.fileInfoEntries(),
+                    fileDates: model.dates(of:),
+                    selectionMedia: model.selectionMedia,
+                    cachedMedia: model.cachedMedia(for:),
+                    onToggleFileInfo: model.toggleFileInfo,
+                    onPlayerChange: model.previewPlayerChanged,
+                    onPlayingChange: model.previewPlayingChanged,
+                    playbackSeekRequest: model.playbackSeekRequest
+                )
             }
         }
         .padding(8)
     }
 
-    // Copy To와 Run Rename 버튼 폭을 맞춘다
-    private let actionButtonWidth: CGFloat = 110
+    // Copy To 버튼 폭
+    private let actionButtonWidth: CGFloat = 95
 
     /// 프리셋 불러오기·저장. 메뉴 버튼에 불러온 프리셋 이름을 보여주고 고쳤으면 *를 붙인다.
     /// 불러오기만 하고 Apply는 직접 누른다. ⌘L로도 열고, 창 밖으로 나가지 않게 버튼 오른쪽 끝에 맞춰 연다
@@ -112,6 +131,7 @@ struct RenamePanel: View {
             }
         }
         .background(MenuAnchor { presetMenuAnchor.view = $0 })
+        // 프리셋 이름이 다 보이게 글자 폭에 맞춘다
         .fixedSize()
         .help("Load or save a preset (⌘L)")
         .onChange(of: model.presetMenuRequest) {

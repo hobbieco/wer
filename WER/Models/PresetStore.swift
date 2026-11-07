@@ -102,15 +102,23 @@ nonisolated struct RenamePreset: Identifiable, Codable, Equatable {
             case .text: "Text"
             case .number: "Number"
             case .regex: "Regex"
+            case .replace: "Replace"
             case .changeExtension: "Change Ext"
             case .removeExtension: "Remove Ext"
             case .addExtension: "Add Ext"
+            case .createdDate: "Created"
+            case .modifiedDate: "Modified"
+            case .takenDate: "Taken"
             }
             let option = switch token.kind {
             case .number where !token.option.isEmpty: " step \(token.option)"
+            case .regex where token.option.hasPrefix("$"): " \(token.option)"
             case .regex where !token.option.isEmpty: " pad \(token.option)"
+            case .replace: " → " + token.option
             case .text: token.option
             case .changeExtension: " → " + token.option
+            // where는 마지막 패턴에만 걸려서 날짜 종류는 조건으로 묶는다
+            case _ where token.kind.isDate && !token.option.isEmpty: " or \(token.option)"
             default: ""
             }
             return token.value.isEmpty ? kind : "\(kind) \(token.value)\(option)"

@@ -6,10 +6,12 @@
 import AppKit
 import SwiftUI
 
-/// Add Empty Files 창 (File > Add Empty Files…, ⌥⌘N, Select의 버튼).
+/// Create Empty Files 창 (File > Create Empty Files…, ⌥⌘N, Select의 버튼).
 /// 설정 > Empty Files의 기본값으로 시작하고, 바꾼 값은 저장하지 않는다. Select의 현재 폴더에 실제 파일을 바로 만든다
 struct EmptyFilesSheet: View {
     let model: BrowserModel
+    /// 창 높이에 맞춘 높이 (fittedHeight(in:)). 파일 수와 관계없이 같고, 파일이 많으면 목록이 스크롤된다
+    var height = EmptyFilesSheet.height
     @Environment(\.dismiss) private var dismiss
     @State private var spec = EmptyFileSpec.saved
     @FocusState private var focus: EmptyFileSpec.Field?
@@ -30,8 +32,8 @@ struct EmptyFilesSheet: View {
     private var plan: EmptyFilePlan? { spec.plan(in: model.folder) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Add Empty Files")
+        VStack(alignment: .leading, spacing: Self.spacing) {
+            Text("Create Empty Files")
                 .font(.headline)
 
             EmptyFileSpecFields(spec: $spec, focus: $focus)
@@ -39,6 +41,30 @@ struct EmptyFilesSheet: View {
 
             Divider()
 
+            // 버튼을 입력칸 바로 아래에 둔다. 시트가 높아도 Max를 고치고 Create를 누르는 거리가 짧다.
+            // 상태 문구는 Create가 꺼진 이유라 버튼 왼쪽에 둔다
+            HStack(alignment: .firstTextBaseline) {
+                status
+                    .font(.callout)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Button("Cancel", role: .cancel) {
+                    if let creation { creation.cancel() } else { dismiss() }
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("Create") { create() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canCreate)
+            }
+
+            if isCreating {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+            }
+
+            fileList
+
+            // 목록 전체 요약 (Finder 상태 막대처럼 목록 아래)
             HStack {
                 Label {
                     Text((model.folder.path as NSString).abbreviatingWithTildeInPath)
@@ -50,7 +76,7 @@ struct EmptyFilesSheet: View {
                 .help(model.folder.path)
                 Spacer()
                 if let plan {
-                    Text("\(plan.files.count) files · \(Self.format(plan.totalBytes))")
+                    Text("\(plan.files.count) file\(plan.files.count == 1 ? "" : "s") · \(Self.format(plan.totalBytes))")
                         .foregroundStyle(.secondary)
                         .fixedSize()
                 }
@@ -62,31 +88,10 @@ struct EmptyFilesSheet: View {
                 }
             }
             .font(.callout)
-
-            fileList
-
-            status
-                .font(.callout)
-
-            if isCreating {
-                ProgressView(value: progress)
-                    .progressViewStyle(.linear)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) {
-                    if let creation { creation.cancel() } else { dismiss() }
-                }
-                .keyboardShortcut(.cancelAction)
-                Button("Create") { create() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canCreate)
-            }
         }
-        // 폭은 설정 창 기본 폭과 같게. 높이는 창 최소 높이에서도 아래 상태 바가 보이게
-        .padding(20)
-        .frame(width: Self.width, height: PaneLayout.minHeight - 70)
+        // 폭은 설정 창 기본 폭과 같게. 높이는 창 안에 들어가게 (맨 아래 줄이 가려지지 않도록)
+        .padding(Self.padding)
+        .frame(width: Self.width, height: height)
         .interactiveDismissDisabled(isCreating)
         // 주로 Max만 바꿔 가며 쓴다
         .onAppear { focus = .max }
@@ -115,6 +120,17 @@ struct EmptyFilesSheet: View {
     }
 
     static let width: CGFloat = 520
+    /// 창 높이를 재기 전의 기본 높이
+    static let height: CGFloat = 670
+    /// 창이 아주 작아도 시트가 이보다 작아지지 않는 높이
+    static let minHeight: CGFloat = 420
+    private static let spacing: CGFloat = 12
+    private static let padding: CGFloat = 20
+
+    /// 창 내용 높이에서 위아래 여유를 뺀 높이. 시트가 창 밖으로 넘치지 않고, 창이 크면 함께 커진다
+    static func fittedHeight(in contentHeight: CGFloat) -> CGFloat {
+        max(contentHeight - 24, minHeight).rounded()
+    }
 
     /// 만들 파일 목록. 이미 있는 이름은 주황색으로 표시한다
     @ViewBuilder
@@ -169,6 +185,7 @@ struct EmptyFilesSheet: View {
         if let failure {
             Label(failure, systemImage: "xmark.octagon.fill")
                 .foregroundStyle(.red)
+                .help(failure)
         } else if !existing.isEmpty {
             HStack(alignment: .firstTextBaseline) {
                 Label {
@@ -186,6 +203,7 @@ struct EmptyFilesSheet: View {
         } else if let shortage {
             Label(shortage, systemImage: "xmark.octagon.fill")
                 .foregroundStyle(.red)
+                .help(shortage)
         } else if spec.nameTooLong {
             Label("File name is too long", systemImage: "xmark.octagon.fill")
                 .foregroundStyle(.red)
@@ -219,7 +237,7 @@ struct EmptyFilesSheet: View {
     }
 }
 
-/// 빈 파일 입력칸 묶음. Add Empty Files 창과 설정 > Empty Files가 함께 쓴다
+/// 빈 파일 입력칸 묶음. Create Empty Files 창과 설정 > Empty Files가 함께 쓴다
 struct EmptyFileSpecFields: View {
     @Binding var spec: EmptyFileSpec
     var focus: FocusState<EmptyFileSpec.Field?>.Binding

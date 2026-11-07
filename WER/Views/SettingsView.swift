@@ -4,13 +4,17 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 설정 창 (WER > Settings…, ⌘,)
 struct SettingsView: View {
     enum Tab: String {
         case general
+        case display
+        case copy
         case presets
         case emptyFiles
+        case kitty
     }
 
     /// 설정 창 id. SwiftUI의 Settings 창은 크기를 조정할 수 없어서 일반 창(Window)으로 연다
@@ -25,15 +29,25 @@ struct SettingsView: View {
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
                 .tag(Tab.general.rawValue)
+            DisplaySettingsView()
+                .tabItem { Label("Display", systemImage: "textformat.size") }
+                .tag(Tab.display.rawValue)
+            CopySettingsView()
+                .tabItem { Label("Copy", systemImage: "doc.on.doc") }
+                .tag(Tab.copy.rawValue)
             PresetsSettingsView()
                 .tabItem { Label("Presets", systemImage: "bookmark") }
                 .tag(Tab.presets.rawValue)
             EmptyFilesSettingsView()
                 .tabItem { Label("Empty Files", systemImage: "doc.badge.plus") }
                 .tag(Tab.emptyFiles.rawValue)
+            Form { KittySettingsSection() }
+                .formStyle(.grouped)
+                .tabItem { Label("kitty", systemImage: "terminal") }
+                .tag(Tab.kitty.rawValue)
         }
-        // 크기 조정 가능. General은 작아지면 스크롤, Presets는 커지면 목록이 늘어난다
-        .frame(minWidth: 520, maxWidth: .infinity, minHeight: 400, maxHeight: .infinity)
+        // 크기 조정 가능. 각 탭은 작아지면 스크롤. 폭은 탭 6개가 모두 보이게 (좁으면 넘친 탭이 » 버튼으로 숨는다), Presets는 커지면 목록이 늘어난다
+        .frame(minWidth: 660, maxWidth: .infinity, minHeight: 400, maxHeight: .infinity)
     }
 }
 
@@ -42,12 +56,6 @@ struct SettingsView: View {
 private struct GeneralSettingsView: View {
     private let presetStore = PresetStore.shared
     @AppStorage(AppSettings.startupPresetKey) private var startupPresetID = RenamePreset.defaultID.uuidString
-    @AppStorage(AppSettings.copyFolderNameKey) private var copyFolderName = AppSettings.builtInCopyFolderName
-    @AppStorage(AppSettings.removeCopiesToTrashKey) private var removesCopiesToTrash = false
-    @AppStorage(AppSettings.previewAutoplaysMediaKey) private var previewAutoplaysMedia = false
-    @AppStorage(AppSettings.sortFoldersFirstKey) private var sortsFoldersFirst = true
-    @AppStorage(AppSettings.listTextSizeKey) private var listTextSize = AppSettings.ListTextSize.small
-    @AppStorage(AppSettings.monospacedNamesKey) private var monospacedNames = true
 
     var body: some View {
         Form {
@@ -81,9 +89,68 @@ private struct GeneralSettingsView: View {
                 pathKey: AppSettings.goToPathKey,
                 fallbackNote: "Falls back to the current folder"
             )
+        }
+        .formStyle(.grouped)
+    }
+
+    static let chosenFolderOptions: [(AppSettings.FolderMode, String)] = [
+        (.last, "Last Chosen"), (.current, "Current Folder"), (.custom, "Specific Folder"),
+    ]
+}
+
+// MARK: - Display
+
+private struct DisplaySettingsView: View {
+    @AppStorage(AppSettings.listTextSizeKey) private var listTextSize = AppSettings.ListTextSize.small
+    @AppStorage(AppSettings.monospacedNamesKey) private var monospacedNames = true
+    @AppStorage(AppSettings.sortFoldersFirstKey) private var sortsFoldersFirst = true
+    @AppStorage(AppSettings.previewStartModeKey) private var previewStartMode = AppSettings.PreviewStartMode.last
+    @AppStorage(AppSettings.showsInputGuideKey) private var showsInputGuide = true
+
+    var body: some View {
+        Form {
+            Section("List") {
+                Picker("Text Size", selection: $listTextSize) {
+                    ForEach(AppSettings.ListTextSize.allCases, id: \.self) { size in
+                        Text(size.title).tag(size)
+                    }
+                }
+                .help("Text size of the Select and Order lists")
+                Toggle("Monospaced Names and Fields", isOn: $monospacedNames)
+                    .help("Show file names in Select and Order, and the name, pattern and path fields, in a fixed-width font so numbers line up")
+            }
+            Section("Sort") {
+                Toggle("Folders First", isOn: $sortsFoldersFirst)
+                    .help("In Select, list folders before files in either sort order")
+            }
+            Section("Preview") {
+                Picker("Start with", selection: $previewStartMode) {
+                    ForEach(AppSettings.PreviewStartMode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .help("What the Preview pane shows when WER starts. Last Used keeps the eye button state. Info shows file details without opening files")
+            }
+            Section("Input") {
+                Toggle("Show Input Guide", isOn: $showsInputGuide)
+                    .help("While typing in Rename, show how to fill the field next to it. Turning it off also hides field description tooltips. Error tooltips stay")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Copy
+
+private struct CopySettingsView: View {
+    @AppStorage(AppSettings.copyFolderNameKey) private var copyFolderName = AppSettings.builtInCopyFolderName
+    @AppStorage(AppSettings.removeCopiesToTrashKey) private var removesCopiesToTrash = false
+
+    var body: some View {
+        Form {
             FolderSettingRow(
                 title: "Copy To",
-                options: Self.chosenFolderOptions,
+                options: GeneralSettingsView.chosenFolderOptions,
                 defaultMode: AppSettings.defaultCopyToMode,
                 modeKey: AppSettings.copyToModeKey,
                 pathKey: AppSettings.copyToPathKey,
@@ -124,31 +191,9 @@ private struct GeneralSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("List") {
-                Picker("Text Size", selection: $listTextSize) {
-                    ForEach(AppSettings.ListTextSize.allCases, id: \.self) { size in
-                        Text(size.title).tag(size)
-                    }
-                }
-                .help("Text size of the Select and Order lists")
-                Toggle("Monospaced Names and Fields", isOn: $monospacedNames)
-                    .help("Show file names in Select and Order, and the name, pattern and path fields, in a fixed-width font so numbers line up")
-            }
-            Section("Sort") {
-                Toggle("Folders First", isOn: $sortsFoldersFirst)
-                    .help("In Select, list folders before files in either sort order")
-            }
-            Section("Preview") {
-                Toggle("Play Media Automatically", isOn: $previewAutoplaysMedia)
-                    .help("Start videos and audio as soon as they are shown in Preview")
-            }
         }
         .formStyle(.grouped)
     }
-
-    private static let chosenFolderOptions: [(AppSettings.FolderMode, String)] = [
-        (.last, "Last Chosen"), (.current, "Current Folder"), (.custom, "Specific Folder"),
-    ]
 }
 
 /// [마지막으로 고른 폴더 | 현재 폴더 | 지정 폴더] 선택과 지정 폴더 경로
@@ -218,7 +263,7 @@ private struct FolderSettingRow: View {
 
 // MARK: - Empty Files
 
-/// Add Empty Files 창을 열 때 채울 기본값. 비워 두면 창에서도 빈 칸으로 시작한다
+/// Create Empty Files 창을 열 때 채울 기본값. 비워 두면 창에서도 빈 칸으로 시작한다
 private struct EmptyFilesSettingsView: View {
     @State private var spec = EmptyFileSpec.saved
     @FocusState private var focus: EmptyFileSpec.Field?
@@ -226,7 +271,7 @@ private struct EmptyFilesSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             EmptyFileSpecFields(spec: $spec, focus: $focus)
-            Text("Add Empty Files (⌥⌘N) starts with these values each time. Changes made there are not saved. Files are named <Name>-<size in bytes>.<Ext>. Empty fields use: Name wer-create, Max = Min (or 10), Count 1.")
+            Text("Create Empty Files (⌥⌘N) starts with these values each time. Changes made there are not saved. Files are named <Name>-<size in bytes>.<Ext>. Empty fields use: Name wer-create, Max = Min (or 10), Count 1.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -244,6 +289,16 @@ private struct EmptyFilesSettingsView: View {
 private struct PresetsSettingsView: View {
     private let store = PresetStore.shared
     @State private var selection: Set<RenamePreset.ID> = []
+    /// 편집할 프리셋을 골랐을 때의 내용. Reset이 이 상태로 되돌린다
+    @State private var loadedPreset: RenamePreset?
+    /// 프리셋을 고르지 않았을 때 비활성으로 보여줄 빈 편집기 (높이를 유지한다)
+    /// 구분자는 새 프리셋과 같게 채운다 (비우면 "Separator" 안내 글자가 잘려 보인다)
+    @State private var placeholder = RenamePreset(
+        name: "",
+        tokens: PresetStore.shared.defaultPreset.tokens.map { NameToken(separator: $0.separator) },
+        usesSeparator: true,
+        omitsLastSeparator: PresetStore.shared.defaultPreset.omitsLastSeparator
+    )
 
     /// 하나만 골랐을 때 편집한다
     private var editingID: RenamePreset.ID? {
@@ -269,22 +324,31 @@ private struct PresetsSettingsView: View {
                     .foregroundStyle(.secondary)
             }
             .labelStyle(.iconOnly)
-
-            Divider()
+            // 목록 버튼 줄과 편집기 상자 사이 (VStack 간격 8 + 8)
+            .padding(.bottom, 8)
 
             if let id = editingID, let preset = store.presets.first(where: { $0.id == id }) {
                 PresetEditor(
                     preset: preset,
                     samples: store.samples(for: id),
-                    onSampleChange: { store.setSample($1, at: $0, for: id) }
+                    onSampleChange: { store.setSample($1, at: $0, for: id) },
+                    resetTarget: loadedPreset?.id == id ? loadedPreset : nil
                 ) { store.update($0) }
             } else {
-                Text(store.presets.isEmpty ? "Add a preset with +." : "Select a preset to edit.")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 200)
+                PresetEditor(
+                    preset: placeholder,
+                    samples: Array(repeating: "", count: PresetStore.sampleCount),
+                    onSampleChange: { _, _ in },
+                    resetTarget: nil,
+                    placeholderTitle: store.presets.isEmpty ? "No Presets. Add one with +"
+                        : selection.count > 1 ? "\(selection.count) Presets Selected" : "No Preset Selected"
+                ) { _ in }
             }
         }
         .padding()
+        .onChange(of: editingID, initial: true) { _, id in
+            loadedPreset = id.flatMap { id in store.presets.first { $0.id == id } }
+        }
     }
 
     private static func iconLabel(_ title: String, _ systemImage: String) -> some View {
@@ -344,16 +408,53 @@ private struct PresetEditor: View {
     /// 프리셋별 예시 이름. 빈 줄은 건너뛴다
     let samples: [String]
     let onSampleChange: (Int, String) -> Void
+    /// 골랐을 때의 내용. 지금과 다르면 Reset으로 되돌린다 (이름은 그대로 둔다)
+    let resetTarget: RenamePreset?
+    /// 프리셋을 고르지 않았을 때의 제목. 있으면 편집기 전체를 비활성으로 보여준다
+    var placeholderTitle: String?
     let onChange: (RenamePreset) -> Void
 
     @AppStorage(AppSettings.monospacedNamesKey) private var monospacedNames = true
 
+    private var canReset: Bool {
+        guard let resetTarget else { return false }
+        return resetTarget.tokens != preset.tokens || resetTarget.usesSeparator != preset.usesSeparator
+            || resetTarget.omitsLastSeparator != preset.omitsLastSeparator
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // 편집기 제목 줄. 상자 전체를 되돌리는 Reset을 함께 둔다
+            HStack {
+                Text(placeholderTitle ?? preset.name)
+                    .font(.headline)
+                    .foregroundStyle(placeholderTitle == nil ? .primary : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer()
+                Button("Reset") {
+                    guard var restored = resetTarget else { return }
+                    restored.name = preset.name
+                    onChange(restored)
+                }
+                .disabled(!canReset)
+                .help("Restore the slots and separator options as they were when this preset was selected")
+            }
+            GroupBox {
+                editor
+                    .padding(6)
+                    .disabled(placeholderTitle != nil)
+            }
+        }
+    }
+
+    private var editor: some View {
         VStack(alignment: .leading, spacing: 10) {
             TokenGridEditor(
                 tokens: binding(\.tokens),
                 usesSeparator: preset.usesSeparator,
-                omitsLastSeparator: preset.omitsLastSeparator
+                omitsLastSeparator: preset.omitsLastSeparator,
+                showsGuidePopover: true
             )
             .textFieldStyle(.roundedBorder)
 
@@ -399,7 +500,10 @@ private struct PresetEditor: View {
         let sample = samples[row]
         if sample.isEmpty {
             Text("")
-        } else if let built = previewSettings.buildNewName(for: sample, index: orderIndex(row)) {
+        // 샘플은 실제 파일이 아니라 날짜 조각에 지금 시각을 넣는다
+        } else if let built = previewSettings.buildNewName(
+            for: sample, index: orderIndex(row), dates: FileDates(created: .now, modified: .now)
+        ) {
             if built.name == sample {
                 Text("No change")
                     .foregroundStyle(.secondary)
@@ -435,6 +539,78 @@ private struct PresetEditor: View {
             var updated = preset
             updated[keyPath: keyPath] = newValue
             onChange(updated)
+        }
+    }
+}
+
+/// Select 우클릭 > Open in kitty 설정. kitty 위치, 여는 방식(기본 탭), 원격 제어 소켓, 홈 폴더로 실제 열어 보는 Test
+private struct KittySettingsSection: View {
+    @AppStorage(AppSettings.kittyPathKey) private var path = ""
+    @AppStorage(AppSettings.kittyOpenModeKey) private var openMode = KittyLauncher.OpenMode.tab
+    @AppStorage(AppSettings.kittySocketKey) private var socket = KittyLauncher.defaultSocket
+    @State private var isChoosing = false
+    @State private var testResult: KittyLauncher.Outcome?
+    @State private var isTesting = false
+
+    var body: some View {
+        // path(AppStorage)를 읽는 화면이라 바뀌면 다시 그리며 다시 찾는다
+        let location = KittyLauncher.location
+        Section("kitty") {
+            LabeledContent("kitty") {
+                HStack {
+                    Text(location.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "Not found")
+                        .foregroundStyle(location == nil ? Color.orange : Color.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button("Choose…") { isChoosing = true }
+                    if !path.isEmpty {
+                        Button("Reset") { path = "" }
+                            .help("Use the installed kitty")
+                    }
+                }
+            }
+            .help("kitty.app or the kitty executable. Empty uses the installed kitty. Without kitty, Open in kitty isn't shown in the Select menu")
+            .fileImporter(isPresented: $isChoosing, allowedContentTypes: [.application, .unixExecutable]) { result in
+                if case .success(let url) = result { path = url.path }
+            }
+            Picker("Open as", selection: $openMode) {
+                ForEach(KittyLauncher.OpenMode.allCases, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .help("Open in kitty opens a new tab in the current kitty window, or a new window")
+            TextField("Remote control socket", text: $socket, prompt: Text(KittyLauncher.defaultSocket))
+                .help("Same as listen_on in kitty.conf")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Tabs need remote control. Add to kitty.conf, then restart kitty:")
+                Text("allow_remote_control socket-only\nlisten_on \(socket.isEmpty ? KittyLauncher.defaultSocket : socket)")
+                    .monospaced()
+                    .textSelection(.enabled)
+                Text("Without it, a new kitty window opens instead.")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            LabeledContent("Test") {
+                HStack {
+                    if let testResult {
+                        Text(testResult.message)
+                            .foregroundStyle(testResult.isProblem ? Color.orange : Color.secondary)
+                            .lineLimit(2)
+                    }
+                    Button("Open Home in kitty") { test() }
+                        .disabled(location == nil || isTesting)
+                }
+            }
+            .help("Opens your home folder in kitty with these settings")
+        }
+    }
+
+    private func test() {
+        isTesting = true
+        testResult = nil
+        Task {
+            testResult = await KittyLauncher.open(directory: FileManager.default.homeDirectoryForCurrentUser)
+            isTesting = false
         }
     }
 }

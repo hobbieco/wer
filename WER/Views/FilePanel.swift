@@ -14,7 +14,17 @@ struct SelectPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            PanelHeader(title: "Select", isFocused: model.focusedPane == .select, onSelect: { model.requestFocus(.select) }, onCollapse: onCollapse)
+            PanelHeader(
+                title: "Select", isFocused: model.focusedPane == .select, onSelect: { model.requestFocus(.select) },
+                onCollapse: onCollapse,
+                trailing: AnyView(
+                    // 창이 열리는 버튼이라 "…"를 붙인다. 좁아져도 글자를 줄이지 않는다
+                    Button("Create Empty Files…", systemImage: "doc.badge.plus") { model.isEmptyFilesPresented = true }
+                        .fixedSize()
+                        .help("Create Empty Files… (⌥⌘N)")
+                        .disabled(!model.canAddEmptyFiles)
+                )
+            )
             HStack {
                 Button("Go to Folder") { model.isGoToFolderPresented = true }
                     .fixedSize()
@@ -26,13 +36,9 @@ struct SelectPanel: View {
                     .labelStyle(.iconOnly)
                     .background(MenuAnchor { sortMenuAnchor.view = $0 })
                     .help("Sort: \(model.sort.title) (\(model.sort.example)). ⌃⌘S switches")
-                Button("Add Empty Files", systemImage: "doc.badge.plus") { model.isEmptyFilesPresented = true }
-                    .labelStyle(.iconOnly)
-                    .help("Add Empty Files… (⌥⌘N)")
-                    .disabled(!model.canAddEmptyFiles)
                 Spacer()
                 // 선택이 없으면 전체 파일을 추가
-                Button("Add", systemImage: "text.badge.plus") { model.addToOrder() }
+                Button("Add", systemImage: "text.badge.plus") { model.addSelectionToOrder() }
                     .help("Add selected files to Order (all files if none selected). ⌘→ adds selected files, ⌥⌘→ adds all")
                     .disabled(model.files.isEmpty)
                     // 좁아져도 글자를 줄이지 않는다 (최소 폭은 PaneLayout.minSelect)
@@ -106,11 +112,13 @@ struct SelectPanel: View {
                 } message: {
                     Text(model.itemRenameError ?? "")
                 }
-                .contextMenu(forSelectionType: URL.self) { _ in
+                // 우클릭 메뉴. 빈 곳은 메뉴 없음. 대상은 우클릭한 줄이 선택 안이면 선택 전체, 밖이면 그 줄
+                .contextMenu(forSelectionType: URL.self) { urls in
+                    contextMenu(for: urls)
                 } primaryAction: { urls in
                     // List는 Return도 기본 동작으로 보내서, 키 입력이면 이름 바꾸기를 시작한다
                     if NSApp.currentEvent?.type == .keyDown {
-                        startRename()
+                        _ = startRename()
                         return
                     }
                     // 폴더 하나를 더블클릭하면 이동, 파일은 Order에 추가 (여러 개 선택했으면 선택한 파일 전체)
@@ -118,7 +126,7 @@ struct SelectPanel: View {
                     if clicked.count == 1, let folder = clicked.first, folder.isDirectory {
                         model.requestNavigation(to: [folder.url])
                     } else if clicked.contains(where: { !$0.isDirectory }) {
-                        model.addToOrder()
+                        model.addSelectionToOrder()
                     }
                 }
                 // Order에서 끌어다 놓으면 Order 목록에서 제거. Finder에서 다른 폴더의 항목을 놓으면 그 위치로 이동
@@ -164,6 +172,19 @@ struct SelectPanel: View {
 
     /// 항목 하나를 골랐으면 이름 바꾸기를 시작한다
     @discardableResult
+    @ViewBuilder
+    private func contextMenu(for urls: Set<URL>) -> some View {
+        // Select 목록 순서대로 (경로를 여러 줄로 복사할 때의 순서)
+        let targets = model.items.filter { urls.contains($0.url) }
+        if !targets.isEmpty {
+            let _ = model.contextMenuURLs = targets.map(\.url)
+            SelectContextMenu(targets: targets, model: model) { url in
+                model.selection = [url]
+                _ = startRename()
+            }
+        }
+    }
+
     private func startRename() -> Bool {
         guard model.renamingURL == nil, model.selection.count == 1 else {
             if model.renamingURL == nil { model.explainUnavailableListKey("↩") }
@@ -301,7 +322,15 @@ struct OrderPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            PanelHeader(title: "Order", isFocused: model.focusedPane == .order, onSelect: { model.requestFocus(.order) })
+            PanelHeader(
+                title: "Order", isFocused: model.focusedPane == .order, onSelect: { model.requestFocus(.order) },
+                // 직접 정한 순서를 되돌려서, 자주 쓰는 이동 버튼과 떨어뜨려 둔다
+                trailing: AnyView(
+                    Button("Reset", systemImage: "arrow.counterclockwise") { model.resetOrder() }
+                        .help("Reset to Select order")
+                        .disabled(model.orderedFiles.isEmpty)
+                )
+            )
             HStack(spacing: 6) {
                 // 선택이 없으면 목록 전체를 비운다
                 Button("Remove", systemImage: "text.badge.minus") { model.removeFromOrder() }
@@ -318,15 +347,13 @@ struct OrderPanel: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(model.orderSelection.isEmpty)
+                // Select 버튼 줄처럼 오른쪽 끝에 붙여, 칸을 넓혀도 제목 줄의 Reset과 함께 움직인다
+                Spacer(minLength: 0)
                 // 두 개 이상 이어진 선택 구간마다 뒤집고, 그런 구간이 없으면 전체를 뒤집는다
                 Button("Reverse", systemImage: "arrow.up.arrow.down") { model.reverseOrder() }
                     .buttonStyle(.bordered)
                     .help("Reverse each selected block (all if no block of 2 or more is selected). Press again to undo (⇧⌘R)")
                     .disabled(model.orderedFiles.count < 2)
-                Button("Reset", systemImage: "arrow.counterclockwise") { model.resetOrder() }
-                    .buttonStyle(.bordered)
-                    .help("Reset to Select order")
-                    .disabled(model.orderedFiles.isEmpty)
             }
 
             ScrollViewReader { proxy in
@@ -344,13 +371,19 @@ struct OrderPanel: View {
                                 .frame(width: 14)
                                 .help(row.issue ?? "")
                             // Apply 전에는 비워 둔다
-                            Text(HighlightedText.make(
-                                row.newName ?? "", highlights: row.newNameHighlights,
-                                font: textSize.nameFont(monospaced: monospacedNames)
-                            ))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .foregroundStyle(row.isConflict ? .red : .primary)
+                            if row.isLoading {
+                                Text("Loading…")
+                                    .font(textSize.nameFont(monospaced: monospacedNames))
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text(HighlightedText.make(
+                                    row.newName ?? "", highlights: row.newNameHighlights,
+                                    font: textSize.nameFont(monospaced: monospacedNames)
+                                ))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .foregroundStyle(row.isConflict ? .red : .primary)
+                            }
                         }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .blinkCell(row.addBatch)
@@ -425,6 +458,7 @@ struct OrderPanel: View {
                 isConflict: model.renameConflicts.order.contains(item.url) || model.nameIssues.errors[item.url] != nil,
                 isNoMatch: model.regexMisses[item.url] != nil || model.nameIssues.warnings[item.url] != nil,
                 issue: model.issueDescription(for: item.url),
+                isLoading: model.isMediaPending(item.url),
                 isHighlighted: model.selection.contains(item.url),
                 highlights: model.regexHighlights[item.url] ?? [],
                 newNameHighlights: model.newNameHighlights[item.url] ?? [],
@@ -436,7 +470,10 @@ struct OrderPanel: View {
     /// 충돌은 빨간 아이콘, 정규식 불일치는 주황 아이콘. 충돌이 우선
     @ViewBuilder
     private func issueIcon(_ row: OrderRow) -> some View {
-        if row.isConflict {
+        if row.isLoading {
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
+        } else if row.isConflict {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
         } else if row.isNoMatch {
@@ -466,6 +503,8 @@ struct OrderRow: Identifiable, Hashable {
     let isNoMatch: Bool
     /// 경고 아이콘에 마우스를 올렸을 때 보여줄 설명
     let issue: String?
+    /// 촬영일을 읽는 중이라 새 이름이 아직 없다
+    let isLoading: Bool
     let isHighlighted: Bool
     let highlights: [NameHighlight]
     let newNameHighlights: [NameHighlight]
@@ -482,10 +521,16 @@ struct CollapsedPanel: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Button("Expand", systemImage: "chevron.right", action: onExpand)
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .help("Expand \(title)")
+            // 접기 버튼과 같은 크기·누르는 영역
+            Button(action: onExpand) {
+                Image(systemName: "chevron.right")
+                    .imageScale(.large)
+                    .frame(width: PanelHeader.height, height: PanelHeader.height)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Expand")
+            .help("Expand \(title)")
             Text(title)
                 .font(.headline)
                 .fixedSize()
@@ -500,13 +545,22 @@ struct CollapsedPanel: View {
     }
 }
 
-/// 패널 제목. onCollapse가 있으면 우측 끝에 접기 버튼을 둔다.
-/// isFocused를 주면 키 입력을 받는 칸은 강조색, 나머지는 흐리게 표시한다. 제목을 누르면 onSelect(포커스 이동)
+/// 패널 제목. trailing은 오른쪽에 두는 버튼, onCollapse가 있으면 우측 끝에 접기 버튼을 둔다.
+/// isFocused를 주면 키 입력을 받는 칸은 강조색, 나머지는 흐리게 표시한다. 제목을 누르면 onSelect(포커스 이동).
+/// 버튼이 있든 없든 칸마다 제목 줄 높이가 같도록 기본 버튼 높이로 맞춘다
 struct PanelHeader: View {
     let title: String
     var isFocused: Bool?
     var onSelect: (() -> Void)?
     var onCollapse: (() -> Void)?
+    var trailing: AnyView?
+    /// 오른쪽 끝 버튼의 오른쪽 여백
+    var trailingInset = PanelHeader.trailingInset
+
+    /// 기본(bordered) 버튼 높이
+    static let height: CGFloat = 22
+    /// 제목 줄 오른쪽 끝 버튼의 오른쪽 여백 기본값. 아래 줄도 오른쪽 끝에 버튼이 붙어 있어 여백 없이 맞는다
+    static let trailingInset: CGFloat = 0
 
     var body: some View {
         HStack {
@@ -516,13 +570,23 @@ struct PanelHeader: View {
                 .contentShape(Rectangle())
                 .onTapGesture { onSelect?() }
             Spacer()
+            trailing
             if let onCollapse {
-                Button("Collapse", systemImage: "chevron.left", action: onCollapse)
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .help("Collapse \(title)")
+                // 아이콘을 한 단계 키우고 누르는 영역을 버튼 높이만큼 넓힌다.
+                // 영역 안에서 오른쪽에 붙여 아래 줄 버튼 끝과 맞춘 위치를 유지한다
+                Button(action: onCollapse) {
+                    Image(systemName: "chevron.left")
+                        .imageScale(.large)
+                        .frame(width: Self.height, height: Self.height, alignment: .trailing)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Collapse")
+                .help("Collapse \(title)")
             }
         }
+        .padding(.trailing, trailing != nil || onCollapse != nil ? trailingInset : 0)
+        .frame(minHeight: Self.height)
     }
 
     private var titleStyle: AnyShapeStyle {
@@ -622,6 +686,10 @@ enum HighlightedText {
             let lower = characters.index(characters.startIndex, offsetBy: highlight.start)
             let upper = characters.index(lower, offsetBy: highlight.length)
             text[lower..<upper].backgroundColor = RegexPalette.color(highlight.slot).opacity(0.35)
+            // 날짜를 못 찾아 대신 넣은 값은 점선 밑줄로 구분한다
+            if highlight.isFallback {
+                text[lower..<upper].underlineStyle = Text.LineStyle(pattern: .dot, color: RegexPalette.color(highlight.slot))
+            }
         }
         return text
     }
@@ -664,5 +732,134 @@ struct FileRow: View {
 
     private var highlightedName: AttributedString {
         HighlightedText.make(item.name, highlights: highlights, font: textSize.nameFont(monospaced: monospacedNames))
+    }
+}
+
+/// Select 목록 우클릭 메뉴. 파일을 바꾸는 동작은 Rename 하나뿐이고, 여러 개를 한꺼번에 여는 동작은 두지 않는다.
+/// 단축키도 같은 규칙이다 (⌘O·⌘Y는 하나만, ⌘→는 파일만 골랐을 때만).
+/// macOS Services(예: New Terminal at Folder)는 이 메뉴에도, AppKit 메뉴로 바꿔 봐도 나오지 않아 보류 중이다 (2026-11-07).
+/// AppKit 메뉴에서는 Open With 앱 아이콘도 보이지 않아 SwiftUI 메뉴로 되돌렸다
+private struct SelectContextMenu: View {
+    let targets: [FileItem]
+    let model: BrowserModel
+    let rename: (URL) -> Void
+
+    private var urls: [URL] { targets.map(\.url) }
+    private var single: FileItem? { targets.count == 1 ? targets.first : nil }
+    private var isFilesOnly: Bool { !targets.contains(where: \.isDirectory) }
+
+    /// kitty를 열 폴더. 폴더 하나는 그 폴더, 파일은 그 파일들이 있는 폴더. 폴더 여러 개나 섞이면 nil
+    private var kittyDirectory: URL? {
+        if let single, single.isDirectory { return single.url }
+        return isFilesOnly ? model.folder : nil
+    }
+
+    var body: some View {
+        Button("Open") { single.map { model.openItem($0.url) } }
+            .keyboardShortcut("o")
+            .disabled(single == nil)
+        openWithMenu
+        Button("Add to Order") {
+            select()
+            model.addSelectionToOrder(keepsSelection: true)
+        }
+        .keyboardShortcut(.rightArrow)
+        .disabled(!isFilesOnly)
+        Button("Rename") { single.map { rename($0.url) } }
+            .keyboardShortcut(.return, modifiers: [])
+            .disabled(single == nil)
+        Divider()
+        Button("Quick Look") {
+            select()
+            QuickLook.shared.toggle(for: model)
+        }
+        .keyboardShortcut("y")
+        .disabled(single == nil || model.isPreviewPlaying)
+        // 잠깐 확인하는 용도라 다 읽고 5초 뒤 닫힌다 (⌘I로 연 것은 그대로). 미리보기를 끄면 정보가 늘 보인다
+        Button("Show Info") {
+            select()
+            model.showInfoBriefly()
+        }
+        .keyboardShortcut("i")
+        .disabled(!AppSettings.isPreviewEnabled)
+        // 파일 하나·폴더 하나·파일 여러 개만 (폴더 여러 개나 섞이면 Finder 창이 여럿 열릴 수 있다)
+        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(urls) }
+            .disabled(!(single != nil || isFilesOnly))
+        // kitty가 없으면 항목을 뺀다
+        if KittyLauncher.location != nil {
+            Button("Open in kitty") {
+                guard let directory = kittyDirectory else { return }
+                Task {
+                    let outcome = await KittyLauncher.open(directory: directory)
+                    if outcome.isProblem { model.showNotice(outcome.message) }
+                }
+            }
+            .disabled(kittyDirectory == nil)
+        }
+        Divider()
+        Button("Copy Name") { copy(targets.map(\.name)) }
+        // Select 항목은 모두 같은 폴더 안이라 한 줄
+        Button("Copy Path") { copy([model.folder.path]) }
+        Button("Copy Full Path") { copy(urls.map(\.path)) }
+    }
+
+    /// 여기서 고른 동작은 우클릭한 항목을 Select에서 고른 뒤 실행한다 (Finder처럼)
+    private func select() {
+        model.selection = Set(urls)
+    }
+
+    private func copy(_ lines: [String]) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+    }
+
+    /// 파일 하나만. 기본 앱을 맨 위에, 그 밖에 열 수 있는 앱을 이름순으로
+    @ViewBuilder
+    private var openWithMenu: some View {
+        if let file = single, !file.isDirectory {
+            let workspace = NSWorkspace.shared
+            let defaultApp = workspace.urlForApplication(toOpen: file.url)
+            let others = workspace.urlsForApplications(toOpen: file.url)
+                .filter { $0 != defaultApp }
+                .sorted { Self.name(of: $0).localizedStandardCompare(Self.name(of: $1)) == .orderedAscending }
+            Menu("Open With") {
+                if let defaultApp {
+                    appButton(defaultApp, file: file.url, suffix: " (default)")
+                    if !others.isEmpty { Divider() }
+                }
+                ForEach(others, id: \.self) { appButton($0, file: file.url) }
+            }
+        } else {
+            // 비활성 하위 메뉴는 회색으로 그려지지 않아 비활성 버튼으로 보여준다
+            Button("Open With") {}
+                .disabled(true)
+        }
+    }
+
+    private func appButton(_ app: URL, file: URL, suffix: String = "") -> some View {
+        Button {
+            NSWorkspace.shared.open([file], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        } label: {
+            Label {
+                Text(Self.name(of: app) + suffix)
+            } icon: {
+                Image(nsImage: Self.icon(of: app))
+                    .renderingMode(.original)
+            }
+            .labelStyle(.titleAndIcon)
+        }
+    }
+
+    private static func name(of app: URL) -> String {
+        FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: "")
+    }
+
+    /// 메뉴는 여러 크기가 든 앱 아이콘을 그리지 않는 경우가 있어, 16pt 이미지 한 장으로 다시 그린다
+    private static func icon(of app: URL) -> NSImage {
+        let source = NSWorkspace.shared.icon(forFile: app.path)
+        return NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
+            source.draw(in: rect)
+            return true
+        }
     }
 }

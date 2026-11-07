@@ -36,11 +36,12 @@ extension BrowserModel {
         let isListFocused = shortcutPane == .select || shortcutPane == .order
         switch (key, flags) {
         case ("o", [.command]):
-            return "Select a file or folder to open"
+            return previewSelection.count > 1 ? "Select one item to open" : "Select a file or folder to open"
         case ("↑", [.command]) where shortcutPane == .select:
             return "Already at the top level"
         case ("→", [.command]) where shortcutPane == .select:
-            return selection.isEmpty ? "Select files to add (⌥⌘→ adds all)" : "Folders can't be added to Order"
+            if selection.isEmpty { return "Select files to add (⌥⌘→ adds all)" }
+            return hasSelectedFiles ? Self.mixedSelectionMessage : "Folders can't be added to Order"
         case ("→", [.command]) where shortcutPane == .order:
             return "⌘→ adds files selected in Select (⌥⌘→ adds all)"
         case ("→", [.command, .option]) where isListFocused:
@@ -65,7 +66,10 @@ extension BrowserModel {
         case ("[", [.command]):
             return "No earlier rule to go back to"
         case ("y", [.command]):
-            return playbackUnavailableMessage
+            if isPreviewPlaying { return "Pause playback to open Quick Look" }
+            return previewSelection.count > 1 ? "Select one item for Quick Look" : "Select a file or folder to preview"
+        case ("i", [.command]):
+            return AppSettings.isPreviewEnabled ? "Select a file or folder to show info" : "Info is shown while Preview is off"
         case ("n", [.command, .option]):
             if isRunning { return "Wait until the current run finishes" }
             if renamingURL != nil { return nil }

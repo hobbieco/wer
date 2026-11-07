@@ -46,26 +46,36 @@ nonisolated enum FolderLoader {
         try loadWithSizes(folder, showHidden: showHidden, sort: sort, foldersFirst: foldersFirst).items
     }
 
-    /// load와 같고, 파일 용량(바이트)도 함께 돌려준다. 폴더는 용량이 없다.
-    /// 용량은 FileItem에 넣지 않는다 (용량이 바뀌어도 Order의 같은 파일로 알아봐야 한다)
+    /// load와 같고, 파일 용량(바이트)과 등록일·수정일도 함께 돌려준다. 폴더는 용량이 없다.
+    /// 용량·날짜는 FileItem에 넣지 않는다 (바뀌어도 Order의 같은 파일로 알아봐야 한다)
     static func loadWithSizes(
         _ folder: URL, showHidden: Bool, sort: FileSort = .natural, foldersFirst: Bool = false
-    ) throws -> (items: [FileItem], sizes: [URL: Int64]) {
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isPackageKey, .fileSizeKey]
+    ) throws -> (items: [FileItem], sizes: [URL: Int64], dates: [URL: FileDates]) {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isPackageKey, .fileSizeKey, .creationDateKey, .contentModificationDateKey]
         let urls = try FileManager.default.contentsOfDirectory(
             at: folder,
             includingPropertiesForKeys: Array(keys),
             options: showHidden ? [] : [.skipsHiddenFiles]
         )
         var sizes: [URL: Int64] = [:]
+        var dates: [URL: FileDates] = [:]
         let items = urls.map { url in
             let values = try? url.resourceValues(forKeys: keys)
             // .app 같은 패키지는 Finder처럼 파일로 취급 (패키지 용량은 표시하지 않는다)
             let isDirectory = (values?.isDirectory ?? false) && !(values?.isPackage ?? false)
             let item = FileItem(url: url.standardizedFileURL, isDirectory: isDirectory)
             if !(values?.isDirectory ?? false), let size = values?.fileSize { sizes[item.url] = Int64(size) }
+            dates[item.url] = FileDates(created: values?.creationDate, modified: values?.contentModificationDate)
             return item
         }
-        return (sort.sorted(items, foldersFirst: foldersFirst), sizes)
+        return (sort.sorted(items, foldersFirst: foldersFirst), sizes, dates)
+    }
+
+    private static let dateKeys: Set<URLResourceKey> = [.creationDateKey, .contentModificationDateKey]
+
+    /// 파일 하나의 등록일·수정일. 현재 폴더 밖에 있는 Order 파일에 쓴다
+    static func dates(of url: URL) -> FileDates {
+        let values = try? url.resourceValues(forKeys: dateKeys)
+        return FileDates(created: values?.creationDate, modified: values?.contentModificationDate)
     }
 }

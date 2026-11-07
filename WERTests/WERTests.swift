@@ -913,3 +913,230 @@ struct EmptyFileSpecTests {
         }
     }
 }
+
+struct DateTokenTests {
+    /// 2024-05-01 13:22:10 (로컬 시간)
+    private let date = Calendar(identifier: .gregorian).date(
+        from: DateComponents(year: 2024, month: 5, day: 1, hour: 13, minute: 22, second: 10)
+    )!
+
+    private func settings(_ tokens: [NameToken]) -> RenameSettings {
+        var settings = RenameSettings()
+        settings.tokens = tokens + (tokens.count..<RenameSettings.tokenCount).map { _ in NameToken() }
+        return settings
+    }
+
+    @Test func formatsCreatedAndModifiedDates() {
+        let settings = settings([
+            NameToken(kind: .createdDate, value: "yyyy-MM-dd"),
+            NameToken(kind: .modifiedDate, value: "yyyyMMdd_HHmmss"),
+        ])
+        let dates = FileDates(created: date, modified: date.addingTimeInterval(86_400))
+        #expect(settings.newName(for: "IMG_1.jpg", index: 0, dates: dates) == "2024-05-01-20240502_132210.jpg")
+        #expect(settings.usesDates)
+    }
+
+    @Test func quotedTextIsKept() {
+        let token = NameToken(kind: .createdDate, value: "yyyy'y'MM")
+        #expect(token.validationError == nil)
+        #expect(token.resolve(stem: "a", index: 0, dates: FileDates(created: date)) == "2024y05")
+    }
+
+    @Test func missingDateUsesFallback() {
+        let settings = settings([
+            NameToken(kind: .text, value: "a"),
+            NameToken(kind: .createdDate, value: "yyyy"),
+            NameToken(kind: .text, value: "b"),
+        ])
+        // 빈 값이면 구분자만 남는다
+        #expect(settings.newName(for: "x.jpg", index: 0) == "a--b.jpg")
+        var withFallback = settings
+        withFallback.tokens[1].option = "nodate"
+        let built = withFallback.buildNewName(for: "x.jpg", index: 0)
+        #expect(built?.name == "a-nodate-b.jpg")
+        #expect(built?.highlights[1] == NameHighlight(start: 2, length: 6, slot: 1, isFallback: true))
+        // 날짜를 찾으면 밑줄이 없다
+        let found = withFallback.buildNewName(for: "x.jpg", index: 0, dates: FileDates(created: date))
+        #expect(found?.highlights[1].isFallback == false)
+    }
+
+    @Test func trailingSeparatorStaysWhenLastIsEmpty() {
+        let settings = settings([
+            NameToken(kind: .text, value: "a"),
+            NameToken(kind: .modifiedDate, value: "yyyy"),
+        ])
+        #expect(settings.newName(for: "x.jpg", index: 0) == "a-.jpg")
+    }
+
+    @Test func formatErrors() {
+        #expect(NameToken(kind: .createdDate, value: "").needsValue)
+        #expect(NameToken(kind: .createdDate, value: "HH:mm").validationError == NameToken.invalidCharacterMessage)
+        #expect(NameToken(kind: .createdDate, value: "yyyy-Q").validationError != nil)
+        #expect(NameToken(kind: .createdDate, value: "yyyy'at").validationError != nil)
+        #expect(NameToken(kind: .createdDate, value: "'abc'").validationError != nil)
+        #expect(NameToken(kind: .createdDate, value: "---").validationError != nil)
+        #expect(NameToken(kind: .createdDate, value: "yyyy", option: "a/b").optionError != nil)
+        #expect(NameToken(kind: .createdDate, value: "yyyy", option: "").optionError == nil)
+        #expect(!settings([NameToken(kind: .createdDate, value: "")]).isValid)
+        #expect(settings([NameToken(kind: .createdDate, value: "yyyyMMdd")]).isValid)
+    }
+
+    @Test func formatWarnings() {
+        #expect(NameToken(kind: .createdDate, value: "yyyy-mm-dd").valueWarning != nil)
+        #expect(NameToken(kind: .createdDate, value: "YYYY-MM-dd").valueWarning != nil)
+        #expect(NameToken(kind: .createdDate, value: "yyyy-MM-DD").valueWarning != nil)
+        #expect(NameToken(kind: .createdDate, value: "hh-mm").valueWarning != nil)
+        #expect(NameToken(kind: .createdDate, value: "yyyy-MM-dd_HHmm").valueWarning == nil)
+        #expect(NameToken(kind: .createdDate, value: "hhmm a").valueWarning == nil)
+        // 경고는 Apply를 막지 않는다
+        #expect(settings([NameToken(kind: .createdDate, value: "yyyy-mm-dd")]).isValid)
+    }
+
+    @Test func usesEnglishNames() {
+        // 요일·AM/PM은 시스템 언어와 관계없이 영어
+        let token = NameToken(kind: .createdDate, value: "EEE a")
+        #expect(token.resolve(stem: "a", index: 0, dates: FileDates(created: date)) == "Wed PM")
+    }
+
+    @Test func onlyMissingDateGivesEmptyName() {
+        let settings = settings([NameToken(kind: .createdDate, value: "yyyy")])
+        #expect(settings.newName(for: "x", index: 0) == "")
+    }
+}
+
+struct MediaInfoTests {
+    @Test func parsesExifDateAsLocalTime() {
+        let date = MediaInfoReader.exifDate("2024:05:01 13:22:10")
+        let expected = Calendar(identifier: .gregorian).date(
+            from: DateComponents(year: 2024, month: 5, day: 1, hour: 13, minute: 22, second: 10)
+        )
+        #expect(date == expected)
+        #expect(MediaInfoReader.exifDate("0000:00:00 00:00:00") == nil)
+    }
+
+    @Test func kindFromExtension() {
+        #expect(MediaInfoReader.kind(of: URL(filePath: "/a/IMG_1.HEIC")) == .image)
+        #expect(MediaInfoReader.kind(of: URL(filePath: "/a/clip.mov")) == .audiovisual)
+        #expect(MediaInfoReader.kind(of: URL(filePath: "/a/song.mp3")) == .audiovisual)
+        #expect(MediaInfoReader.kind(of: URL(filePath: "/a/doc.txt")) == nil)
+    }
+
+    @MainActor @Test func countText() {
+        #expect(FileInfoView.count(1, "file") == "1 file")
+        #expect(FileInfoView.count(3, "folder") == "3 folders")
+    }
+}
+
+struct KindTitleTests {
+    @MainActor @Test func shortensFirstWordOnly() {
+        let titles = TokenGridEditor.shortTitles(for: "Created Date")
+        #expect(titles.first == "Created Date")
+        #expect(titles.contains("Cre… Date"))
+        #expect(titles.suffix(2) == ["C… Date", "Date"])
+        #expect(TokenGridEditor.shortTitles(for: "Number") == ["Number"])
+    }
+}
+
+struct TakenDateTests {
+    private let date = Calendar(identifier: .gregorian).date(
+        from: DateComponents(year: 2023, month: 12, day: 31, hour: 23, minute: 59, second: 0)
+    )!
+
+    @Test func usesTakenDateOrFallback() {
+        var settings = RenameSettings()
+        settings.tokens[0] = NameToken(kind: .takenDate, value: "yyyyMMdd", option: "nodate")
+        settings.tokens[1] = NameToken(kind: .number, value: "01")
+        #expect(settings.usesMediaMetadata)
+        #expect(settings.newName(for: "IMG_1.HEIC", index: 0, dates: FileDates(taken: date)) == "20231231-01.HEIC")
+        // 등록일·수정일이 있어도 촬영일이 없으면 기본값
+        let other = FileDates(created: date, modified: date)
+        #expect(settings.newName(for: "IMG_1.HEIC", index: 0, dates: other) == "nodate-01.HEIC")
+        #expect(!RenameSettings().usesMediaMetadata)
+    }
+
+    @Test func readResultInfo() {
+        #expect(MediaReadResult.loaded(MediaInfo(taken: date)).info?.taken == date)
+        #expect(MediaReadResult.timedOut.info == nil)
+        #expect(MediaReadResult.notDownloaded.info == nil)
+    }
+
+    @Test func readsImageWithoutExif() async throws {
+        // EXIF가 없는 PNG는 크기만 있고 촬영일은 없다
+        let url = FileManager.default.temporaryDirectory.appending(path: "wer-test-\(UUID().uuidString).png")
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR4nGP4z8DwHwQZGAAZ+wP9c3XDqgAAAABJRU5ErkJggg==")!
+        try png.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let result = await MediaInfoReader.readInBackground(url)
+        #expect(result.info?.taken == nil)
+        #expect(result.info?.pixelSize == CGSize(width: 2, height: 1))
+    }
+}
+
+struct ReplaceTokenTests {
+    private func name(_ token: NameToken, _ original: String) -> String? {
+        var settings = RenameSettings()
+        settings.tokens[0] = token
+        return settings.newName(for: original, index: 0)
+    }
+
+    @Test func replacesEveryMatch() {
+        #expect(name(NameToken(kind: .replace, value: #"\s+"#, option: "-"), "IMG 2024  05.jpg") == "IMG-2024-05.jpg")
+        // 비우면 지운다
+        #expect(name(NameToken(kind: .replace, value: "^IMG_"), "IMG_12.jpg") == "12.jpg")
+        // 그룹으로 순서 바꾸기
+        #expect(name(NameToken(kind: .replace, value: "^(.+)_(.+)$", option: "$2_$1"), "a_b.txt") == "b_a.txt")
+        // 일치하지 않으면 그대로
+        #expect(name(NameToken(kind: .replace, value: "zzz", option: "x"), "photo.jpg") == "photo.jpg")
+        // 자모가 분리된 한글 이름도 찾는다
+        let nfd = "사진 1.jpg".decomposedStringWithCanonicalMapping
+        #expect(name(NameToken(kind: .replace, value: "사진", option: "photo"), nfd) == "photo 1.jpg")
+    }
+
+    @Test func validation() {
+        #expect(NameToken(kind: .replace, value: "").needsValue)
+        #expect(NameToken(kind: .replace, value: "(").validationError != nil)
+        #expect(NameToken(kind: .replace, value: "a", option: "b/c").optionError != nil)
+        #expect(NameToken(kind: .replace, value: "(a)", option: "$2").warning != nil)
+        #expect(NameToken(kind: .replace, value: "(a)", option: "$1").warning == nil)
+        #expect(NameToken(kind: .replace, value: "(a)", option: #"\$5"#).warning == nil)
+    }
+
+    @Test func highlightsAllMatches() {
+        var settings = RenameSettings()
+        settings.tokens[0] = NameToken(kind: .replace, value: "a", option: "b")
+        #expect(settings.highlights(for: "aXa.txt").count == 2)
+    }
+}
+
+struct RegexGroupTests {
+    private func value(_ option: String, _ stem: String = "IMG_5_7") -> String? {
+        NameToken(kind: .regex, value: #"IMG_(\d+)_(\d+)"#, option: option).resolve(stem: stem, index: 0)
+    }
+
+    @Test func picksGroup() {
+        #expect(value("") == "5")
+        #expect(value("000") == "005")
+        #expect(value("$2") == "7")
+        #expect(value("$2:") == "7")
+        #expect(value("$2:000") == "007")
+        #expect(value("$0") == "IMG_5_7")
+    }
+
+    @Test func parsesOption() {
+        #expect(NameToken.regexOption("$$$$")?.group == nil)
+        #expect(NameToken.regexOption("$$$$")?.pad == "$$$$")
+        #expect(NameToken.regexOption("$12:00")?.group == 12)
+        #expect(NameToken.regexOption("$2x") == nil)
+        #expect(NameToken(kind: .regex, value: #"(\d+)"#, option: "$2x").optionError != nil)
+        #expect(NameToken(kind: .regex, value: #"(\d+)"#, option: "$2").optionError != nil)
+        #expect(NameToken(kind: .regex, value: #"(\d+)"#, option: #"\1"#).optionError != nil)
+        #expect(NameToken(kind: .regex, value: #"(\d+)"#, option: "$1:00").optionError == nil)
+        #expect(NameToken(kind: .regex, value: #"(\d+)"#, option: "$1:0a").optionError != nil)
+    }
+
+    @Test func highlightsChosenGroup() {
+        var settings = RenameSettings()
+        settings.tokens[0] = NameToken(kind: .regex, value: #"IMG_(\d+)_(\d+)"#, option: "$2")
+        #expect(settings.highlights(for: "IMG_5_7.jpg") == [NameHighlight(start: 6, length: 1, slot: 0)])
+    }
+}

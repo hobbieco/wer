@@ -28,6 +28,12 @@ final class QuickLook: NSObject {
     func toggle(for model: BrowserModel?) {
         if isVisible {
             close()
+        } else if let model, model.previewSelection.count > 1 {
+            // 여러 개는 열지 않는다 (우클릭 메뉴와 같은 규칙)
+            model.showNotice("Select one item for Quick Look")
+        } else if let model, model.isPreviewPlaying {
+            // 재생 중에는 열지 않는다 (소리가 겹치지 않게, 방향키는 재생 조절에 쓴다)
+            model.showNotice("Pause playback to open Quick Look")
         } else if let model, !model.previewSelection.isEmpty {
             self.model = model
             QLPreviewPanel.shared()?.makeKeyAndOrderFront(nil)
@@ -45,7 +51,8 @@ final class QuickLook: NSObject {
     /// 목록 선택이 바뀌면 따라간다
     func selectionChanged(in model: BrowserModel) {
         guard isVisible, model === self.model else { return }
-        if model.previewSelection.isEmpty {
+        // 비었거나 여러 개가 되면 닫는다
+        if model.previewSelection.count != 1 {
             close()
             return
         }

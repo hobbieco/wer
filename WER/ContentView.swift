@@ -10,6 +10,8 @@ struct ContentView: View {
     @State private var model = BrowserModel()
     @AppStorage(AppSettings.sortFoldersFirstKey) private var sortsFoldersFirst = true
     @SceneStorage("isSelectCollapsed") private var isSelectCollapsed = false
+    /// 창 내용 높이. Create Empty Files 창이 창 밖으로 넘치지 않게 맞춘다
+    @State private var contentHeight: CGFloat = EmptyFilesSheet.height
     // Select와 Rename 칸 폭(pt). Order는 나머지를 갖고, 창 크기를 바꾸면 Order가 늘고 준다
     @SceneStorage("selectWidth") private var selectWidth = PaneLayout.defaultSelectWidth
     @SceneStorage("renameWidth") private var renameWidth = PaneLayout.defaultRenameWidth
@@ -66,6 +68,14 @@ struct ContentView: View {
                         .clipped()
                         .focusSection()
                 }
+                // Rename 입력칸의 안내를 칸 경계를 넘어 Order 칸 위에 그린다
+                .overlayPreferenceValue(InputGuideKey.self) { value in
+                    GeometryReader { proxy in
+                        if let value {
+                            InputGuideOverlay(rect: proxy[value.anchor], size: proxy.size, field: value.field)
+                        }
+                    }
+                }
             }
 
             Divider()
@@ -91,6 +101,11 @@ struct ContentView: View {
                             .controlSize(.small)
                             .tint(model.isReverting ? .orange : .accentColor)
                             .frame(width: 100)
+                    } else if !model.isRunning, model.mediaProgress?.isVisible == true {
+                        // 촬영일 수집 중
+                        ProgressView()
+                            .controlSize(.small)
+                            .help("Reading taken dates of files in Order. Removing the Taken Date slot stops it")
                     }
                     Text(model.runStatusText)
                         .foregroundStyle(.secondary)
@@ -111,6 +126,12 @@ struct ContentView: View {
         }
         .frame(minWidth: PaneLayout.minWidth(isSelectCollapsed: isSelectCollapsed), minHeight: PaneLayout.minHeight)
         .onChange(of: isSelectCollapsed, initial: true) { model.isSelectCollapsed = isSelectCollapsed }
+        // 화면이 세 칸을 다 펼친 최소 폭보다 좁으면 Select를 접은 채 연다 (창이 화면 밖으로 나가지 않게)
+        .onAppear {
+            if let width = NSScreen.main?.visibleFrame.width, width < PaneLayout.minWidth(isSelectCollapsed: false) {
+                isSelectCollapsed = true
+            }
+        }
         // 설정에서 폴더 먼저 정렬을 바꾸면 바로 다시 정렬한다
         .onChange(of: sortsFoldersFirst) { model.reload() }
         // 단축키 안내를 받을 창. 설정 창 등 다른 창이 앞에 오면 해제한다
@@ -180,8 +201,9 @@ struct ContentView: View {
         .sheet(isPresented: $model.isGoToFolderPresented) {
             GoToFolderSheet(initialFolder: model.goToFolderStart) { model.requestGo(to: $0) }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         .sheet(isPresented: $model.isEmptyFilesPresented) {
-            EmptyFilesSheet(model: model)
+            EmptyFilesSheet(model: model, height: EmptyFilesSheet.fittedHeight(in: contentHeight))
         }
         .sheet(isPresented: $model.isCopyFolderPresented) {
             GoToFolderSheet(

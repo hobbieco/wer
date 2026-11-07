@@ -5,6 +5,14 @@
 
 import Foundation
 
+/// 이름 조각에 넣을 파일 날짜. 못 찾으면 nil
+nonisolated struct FileDates: Equatable, Hashable {
+    var created: Date?
+    var modified: Date?
+    /// 촬영일 (이미지 EXIF, 영상 QuickTime 메타데이터). 백그라운드에서 읽는다
+    var taken: Date?
+}
+
 /// 새 이름을 이루는 조각 하나
 nonisolated struct NameToken: Equatable, Identifiable, Codable {
     enum Kind: String, Hashable, CaseIterable, Codable {
@@ -17,6 +25,9 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
         /// 원본 이름(확장자 제외)에서 정규식으로 추출. 캡처 그룹이 있으면 첫 그룹, 없으면 전체 일치.
         /// option은 채우기 모양: "0000"이면 왼쪽을 0으로 채워 4자리 (비우면 채우지 않음)
         case regex
+        /// 원래 이름(확장자 제외)에서 정규식에 일치하는 곳을 모두 option으로 바꾼다 ($1 그룹, $0 전체 일치, 비우면 지움).
+        /// 일치하지 않으면 원래 이름 그대로. 채우기는 하지 않는다 (Regex를 쓴다)
+        case replace
         /// 확장자 바꾸기(Change Ext). value는 대상 확장자(대소문자 구분), option은 바꿀 확장자. 둘 다 필수.
         /// 이름 조각이 아니라 순서·구분자를 쓰지 않는다
         case changeExtension = "extension"
@@ -24,6 +35,18 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
         case removeExtension
         /// 확장자 붙이기(Add Ext). 확장자가 없는 파일에만 value를 붙인다 (서버에서 받은 확장자 없는 파일 등). option·구분자는 쓰지 않는다
         case addExtension
+        /// 파일 등록일. value는 날짜 형식(ICU, 예: yyyy-MM-dd), option은 날짜를 못 찾을 때 넣을 값(비우면 빈 값이라 구분자만 남는다)
+        case createdDate
+        /// 파일 수정일. value·option은 Created Date와 같다
+        case modifiedDate
+        /// 촬영일 (이미지 EXIF, 영상 QuickTime 메타데이터). value·option은 Created Date와 같다
+        case takenDate
+
+        /// 날짜 조각인지 (Created·Modified·Taken Date)
+        var isDate: Bool { self == .createdDate || self == .modifiedDate || self == .takenDate }
+
+        /// 파일 안의 정보를 읽어야 하는지. 있으면 Order의 이미지·영상을 백그라운드에서 읽는다
+        var usesMediaMetadata: Bool { self == .takenDate }
 
         /// 확장자 규칙인지 (Change Ext·Remove Ext·Add Ext)
         var isExtensionRule: Bool { self == .changeExtension || self == .removeExtension || self == .addExtension }
@@ -40,10 +63,28 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
     var separator = "-"
 
     /// index번째(Order 순서, 0부터) 파일의 조각 값. 값이 없거나 형식이 잘못되면 nil
-    func resolve(stem: String, index: Int) -> String? {
+    func resolve(stem: String, index: Int, dates: FileDates = FileDates()) -> String? {
+        resolvePart(stem: stem, index: index, dates: dates)?.value
+    }
+
+    /// 조각 값과, 날짜를 못 찾아 두 번째 칸 값을 썼는지
+    func resolvePart(stem: String, index: Int, dates: FileDates) -> (value: String, isFallback: Bool)? {
         guard validationError == nil, optionError == nil else { return nil }
+        if kind.isDate {
+            let date = switch kind {
+            case .createdDate: dates.created
+            case .modifiedDate: dates.modified
+            default: dates.taken
+            }
+            guard let date else { return (option, true) }
+            return (DateFormat.string(from: date, format: value), false)
+        }
+        return resolveValue(stem: stem, index: index).map { ($0, false) }
+    }
+
+    private func resolveValue(stem: String, index: Int) -> String? {
         switch kind {
-        case .none, .changeExtension, .removeExtension, .addExtension:
+        case .none, .changeExtension, .removeExtension, .addExtension, .createdDate, .modifiedDate, .takenDate:
             return nil
         case .text:
             return value + option
@@ -56,8 +97,27 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
             let padded = String(repeating: "0", count: max(width - digits.count, 0)) + digits
             return number < 0 ? "-" + padded : padded
         case .regex:
-            return regexRange(in: stem).map { Self.pad(String(stem[$0]), with: option) }
+            let pad = Self.regexOption(option)?.pad ?? ""
+            return regexRange(in: stem).map { Self.pad(String(stem[$0]), with: pad) }
+        case .replace:
+            guard let regex = RegexCache.regex(value) else { return nil }
+            return regex.stringByReplacingMatches(
+                in: stem, range: NSRange(stem.startIndex..., in: stem), withTemplate: option.precomposedStringWithCanonicalMapping
+            )
         }
+    }
+
+    /// Regex 두 번째 칸. "$2"나 "$2:0000"이면 그룹 2를 고르고 ":" 뒤 모양으로 채운다. "$" 뒤가 숫자가 아니면 지금처럼 채우기 모양.
+    /// "$숫자" 뒤에 ":" 말고 다른 글자가 오면 nil (오류)
+    static func regexOption(_ option: String) -> (group: Int?, pad: String)? {
+        guard option.hasPrefix("$"), option.dropFirst().first?.isASCII == true, option.dropFirst().first?.isNumber == true
+        else { return (nil, option) }
+        let digits = option.dropFirst().prefix { $0.isASCII && $0.isNumber }
+        let rest = option.dropFirst(1 + digits.count)
+        guard let group = Int(digits) else { return nil }
+        if rest.isEmpty { return (group, "") }
+        guard rest.hasPrefix(":") else { return nil }
+        return (group, String(rest.dropFirst()))
     }
 
     /// Number 증가 폭. 비우면 1
@@ -81,9 +141,29 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
     /// 실행은 되지만 확인이 필요한 상태(주황). Apply·저장을 막지 않는다.
     /// Change Ext의 대상과 바꿀 확장자가 같으면(완전 일치) 아무것도 바뀌지 않는다
     var warning: String? {
+        if kind == .replace { return replaceWarning }
         guard kind == .changeExtension, validationError == nil, optionError == nil,
               RenameSettings.extensionKey(value) == RenameSettings.extensionKey(option) else { return nil }
         return "Same as the target extension. Nothing changes"
+    }
+
+    /// Replace 바꿀 값이 패턴에 없는 그룹을 가리키면 빈 값이 들어간다
+    private var replaceWarning: String? {
+        guard validationError == nil, optionError == nil, let count = RegexCache.regex(value)?.numberOfCaptureGroups
+        else { return nil }
+        // "\$"는 달러 글자라 그룹이 아니다
+        let template = option.replacingOccurrences(of: "\\$", with: "")
+        let references = template.split(separator: "$", omittingEmptySubsequences: false).dropFirst().compactMap {
+            Int($0.prefix { $0.isASCII && $0.isNumber })
+        }
+        guard let missing = references.first(where: { $0 > count }) else { return nil }
+        return "$\(missing) isn't in the pattern (\(count) group\(count == 1 ? "" : "s")). It becomes empty"
+    }
+
+    /// 첫 칸의 확인이 필요한 상태(주황). 날짜 형식에서 흔히 틀리는 글자. Apply·저장을 막지 않는다
+    var valueWarning: String? {
+        guard kind.isDate, validationError == nil else { return nil }
+        return DateFormat.warning(value)
     }
 
     /// Text의 두 칸이 모두 빈 상태. 오류 표시를 커서가 있는 칸에 두는 데 쓴다
@@ -97,15 +177,32 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
         return String(repeating: character, count: template.count - text.count) + text
     }
 
-    /// 정규식이 추출하는 범위. 캡처 그룹이 있으면 첫 그룹, 없으면 전체 일치. 일치하지 않거나 빈 범위면 nil.
+    /// 정규식이 추출하는 범위. 두 번째 칸에서 고른 그룹($2), 고르지 않으면 첫 그룹, 그룹이 없으면 전체 일치.
+    /// 일치하지 않거나 빈 범위면 nil.
     /// stem은 NFC로 맞춰 넘긴다 (RenameSettings.stem). 패턴도 NFC로 맞춰, 자모가 분리된 한글도 [가-힣]이나 한글 글자로 찾는다
     func regexRange(in stem: String) -> Range<String.Index>? {
-        guard kind == .regex, !value.isEmpty,
-              let regex = try? NSRegularExpression(pattern: value.precomposedStringWithCanonicalMapping),
+        guard kind == .regex, !value.isEmpty, let chosen = Self.regexOption(option),
+              let regex = RegexCache.regex(value),
               let match = regex.firstMatch(in: stem, range: NSRange(stem.startIndex..., in: stem)) else { return nil }
-        let group = match.numberOfRanges > 1 && match.range(at: 1).location != NSNotFound ? 1 : 0
-        guard let range = Range(match.range(at: group), in: stem), !range.isEmpty else { return nil }
+        let group = chosen.group ?? (match.numberOfRanges > 1 && match.range(at: 1).location != NSNotFound ? 1 : 0)
+        guard group < match.numberOfRanges, match.range(at: group).location != NSNotFound,
+              let range = Range(match.range(at: group), in: stem), !range.isEmpty else { return nil }
         return range
+    }
+
+    /// 원래 이름에서 강조할 범위. Regex는 꺼내는 부분, Replace는 바뀌는 모든 곳
+    func highlightRanges(in stem: String) -> [Range<String.Index>] {
+        switch kind {
+        case .regex:
+            return regexRange(in: stem).map { [$0] } ?? []
+        case .replace:
+            guard !value.isEmpty, let regex = RegexCache.regex(value) else { return [] }
+            return regex.matches(in: stem, range: NSRange(stem.startIndex..., in: stem)).compactMap {
+                Range($0.range, in: stem).flatMap { $0.isEmpty ? nil : $0 }
+            }
+        default:
+            return []
+        }
     }
 
     /// 값 오류. 빈 값은 오류(Text는 두 칸이 모두 비었을 때만). None이면 검사하지 않는다
@@ -125,13 +222,15 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
             let digits = value.hasPrefix("-") ? value.dropFirst() : Substring(value)
             return !digits.isEmpty && digits.allSatisfy({ $0.isASCII && $0.isNumber })
                 ? nil : "Start must be a whole number, e.g. 0001 or -01"
-        case .regex:
+        case .regex, .replace:
             do {
                 _ = try NSRegularExpression(pattern: value)
                 return nil
             } catch {
                 return error.localizedDescription
             }
+        case .createdDate, .modifiedDate, .takenDate:
+            return DateFormat.error(value)
         }
     }
 
@@ -143,7 +242,7 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
         switch kind {
         case .none, .removeExtension, .addExtension:
             return nil
-        case .text:
+        case .text, .createdDate, .modifiedDate, .takenDate:
             return Self.containsInvalidFileNameCharacter(option) ? Self.invalidCharacterMessage : nil
         case .changeExtension:
             return Self.extensionError(option)
@@ -151,8 +250,18 @@ nonisolated struct NameToken: Equatable, Identifiable, Codable {
             guard let step = Int(option) else { return "Step must be a whole number, e.g. 1 or -1" }
             return step == 0 ? "Step can't be 0" : nil
         case .regex:
-            if Self.containsInvalidFileNameCharacter(option) { return Self.invalidCharacterMessage }
-            return Set(option).count == 1 ? nil : "Pad must repeat one character, e.g. 0000"
+            if option.hasPrefix("\\") { return "Use $1 for group 1, or $1:0000 to pad it" }
+            guard let (group, pad) = Self.regexOption(option) else {
+                return "Pick a group as $2, or $2:0000 to pad it"
+            }
+            if let group, let count = RegexCache.regex(value)?.numberOfCaptureGroups, group > count {
+                return count == 0 ? "The pattern has no groups. Use $0 for the whole match" : "The pattern has only \(count) group\(count == 1 ? "" : "s")"
+            }
+            if pad.isEmpty { return nil }
+            if Self.containsInvalidFileNameCharacter(pad) { return Self.invalidCharacterMessage }
+            return Set(pad).count == 1 ? nil : "Pad must repeat one character, e.g. 0000"
+        case .replace:
+            return Self.containsInvalidFileNameCharacter(option) ? Self.invalidCharacterMessage : nil
         }
     }
 
@@ -210,11 +319,111 @@ nonisolated extension NameToken {
     }
 }
 
-/// 원래 이름에서 정규식이 추출한 부분. 위치는 문자(Character) 단위, slot은 조각 번호
+/// 원래 이름에서 정규식이 추출한 부분. 위치는 문자(Character) 단위, slot은 조각 번호.
+/// isFallback은 날짜를 못 찾아 두 번째 칸 값을 쓴 부분 (점선 밑줄로 구분한다)
 nonisolated struct NameHighlight: Hashable {
     let start: Int
     let length: Int
     let slot: Int
+    var isFallback = false
+}
+
+/// 컴파일한 정규식. 파일마다 새로 만들지 않는다. 패턴은 NFC로 맞춘다 (자모가 분리된 한글 이름도 찾도록)
+nonisolated enum RegexCache {
+    static func regex(_ pattern: String) -> NSRegularExpression? {
+        cache.regex(pattern)
+    }
+
+    private static let cache = Store()
+
+    private final class Store: @unchecked Sendable {
+        private let lock = NSLock()
+        private var regexes: [String: NSRegularExpression?] = [:]
+
+        func regex(_ pattern: String) -> NSRegularExpression? {
+            lock.withLock {
+                if let cached = regexes[pattern] { return cached }
+                let regex = try? NSRegularExpression(pattern: pattern.precomposedStringWithCanonicalMapping)
+                // 입력할 때마다 패턴이 쌓이지 않도록 많아지면 비운다
+                if regexes.count > 200 { regexes.removeAll() }
+                regexes[pattern] = regex
+                return regex
+            }
+        }
+    }
+}
+
+/// 날짜 조각의 형식. ICU 형식(Swift DateFormatter·Java와 같다)에서 이름에 쓸 만한 글자만 받는다
+nonisolated enum DateFormat {
+    /// 받는 형식 글자. Y·D는 흔한 실수라 받되 경고한다
+    static let letters: Set<Character> = ["y", "M", "d", "H", "h", "m", "s", "S", "a", "E", "Y", "D"]
+
+    /// 따옴표 밖의 형식 글자(ASCII 영문자). 따옴표가 닫히지 않으면 nil. ''는 따옴표 글자 자체
+    static func fieldLetters(_ format: String) -> [Character]? {
+        var result: [Character] = []
+        var isQuoted = false
+        var characters = Array(format)[...]
+        while let character = characters.popFirst() {
+            if character == "'" {
+                if characters.first == "'" {
+                    characters.removeFirst()
+                } else {
+                    isQuoted.toggle()
+                }
+            } else if !isQuoted, character.isASCII, character.isLetter {
+                result.append(character)
+            }
+        }
+        return isQuoted ? nil : result
+    }
+
+    /// 형식 오류. 빈 값은 NameToken이 먼저 거른다
+    static func error(_ format: String) -> String? {
+        if NameToken.containsInvalidFileNameCharacter(format) { return NameToken.invalidCharacterMessage }
+        guard let letters = fieldLetters(format) else { return "Close the quoted text with '" }
+        if let unknown = letters.first(where: { !Self.letters.contains($0) }) {
+            return "Unknown format letter \"\(unknown)\". Use yyyy MM dd HH mm ss, and quote other text like 'at'"
+        }
+        return letters.isEmpty ? "Include a date field, e.g. yyyy-MM-dd" : nil
+    }
+
+    /// 흔히 틀리는 글자 경고. 형식 오류가 없을 때만 본다
+    static func warning(_ format: String) -> String? {
+        guard let letters = fieldLetters(format).map(Set.init) else { return nil }
+        if letters.contains("Y") { return "Y is the week-based year and can differ near New Year. Use yyyy" }
+        if letters.contains("D") { return "D is the day of the year (001-366). Use dd for the day of the month" }
+        if letters.contains("m"), !letters.contains("H"), !letters.contains("h") {
+            return "mm is minutes. Use MM for the month"
+        }
+        if letters.contains("h"), !letters.contains("a") { return "hh is 12-hour without AM/PM. Use HH, or add a" }
+        return nil
+    }
+
+    static func string(from date: Date, format: String) -> String {
+        cache.formatter(for: format).string(from: date)
+    }
+
+    private static let cache = FormatterCache()
+
+    /// 형식별 DateFormatter. 만드는 비용이 커서 파일마다 새로 만들지 않는다
+    private final class FormatterCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var formatters: [String: DateFormatter] = [:]
+
+        func formatter(for format: String) -> DateFormatter {
+            lock.withLock {
+                if let formatter = formatters[format] { return formatter }
+                let formatter = DateFormatter()
+                // 시스템 언어·달력과 관계없이 같은 결과 (요일·AM/PM은 영어, 연도는 서력)
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.calendar = Calendar(identifier: .gregorian)
+                formatter.timeZone = .current
+                formatter.dateFormat = format
+                formatters[format] = formatter
+                return formatter
+            }
+        }
+    }
 }
 
 nonisolated struct RenameSettings: Equatable {
@@ -285,8 +494,8 @@ nonisolated struct RenameSettings: Equatable {
     /// 정규식 조각마다 원래 이름에서 추출한 위치
     func highlights(for name: String) -> [NameHighlight] {
         let stem = Self.stem(of: name)
-        return tokens.enumerated().compactMap { slot, token in
-            token.regexRange(in: stem).map { range in
+        return tokens.enumerated().flatMap { slot, token in
+            token.highlightRanges(in: stem).map { range in
                 NameHighlight(
                     start: stem.distance(from: stem.startIndex, to: range.lowerBound),
                     length: stem.distance(from: range.lowerBound, to: range.upperBound),
@@ -324,12 +533,20 @@ nonisolated struct RenameSettings: Equatable {
         }
     }
 
-    func newName(for name: String, index: Int) -> String? {
-        buildNewName(for: name, index: index)?.name
+    func newName(for name: String, index: Int, dates: FileDates = FileDates()) -> String? {
+        buildNewName(for: name, index: index, dates: dates)?.name
     }
 
+    /// 날짜 조각이 있는지. 없으면 파일 날짜를 읽지 않는다
+    var usesDates: Bool { tokens.contains { $0.kind.isDate } }
+
+    /// 촬영일처럼 파일 안의 정보를 쓰는 조각이 있는지
+    var usesMediaMetadata: Bool { tokens.contains { $0.kind.usesMediaMetadata } }
+
     /// 새 이름과, 새 이름 안에서 각 조각이 차지하는 위치(조각 색 강조용)
-    func buildNewName(for name: String, index: Int) -> (name: String, highlights: [NameHighlight])? {
+    func buildNewName(
+        for name: String, index: Int, dates: FileDates = FileDates()
+    ) -> (name: String, highlights: [NameHighlight])? {
         let stem = Self.stem(of: name)
         let (ext, extensionSlot) = extensionChange(for: name)
         // Change Ext가 바꾼 확장자는 그 칸 색으로 칠한다 (Remove Ext는 지워져서 칠할 부분이 없다)
@@ -342,7 +559,9 @@ nonisolated struct RenameSettings: Equatable {
             return (base + "." + ext, highlights)
         }
         let parts = tokens.enumerated().compactMap { slot, token in
-            token.resolve(stem: stem, index: index).map { (value: $0, separator: token.separator, slot: slot) }
+            token.resolvePart(stem: stem, index: index, dates: dates).map {
+                (value: $0.value, isFallback: $0.isFallback, separator: token.separator, slot: slot)
+            }
         }
         guard !parts.isEmpty else {
             // 확장자 조각만 있으면 원래 이름은 두고 확장자만 바꾼다
@@ -352,7 +571,9 @@ nonisolated struct RenameSettings: Equatable {
         var base = ""
         var highlights: [NameHighlight] = []
         for (offset, part) in parts.enumerated() {
-            highlights.append(NameHighlight(start: base.count, length: part.value.count, slot: part.slot))
+            highlights.append(NameHighlight(
+                start: base.count, length: part.value.count, slot: part.slot, isFallback: part.isFallback
+            ))
             base += part.value
             if usesSeparator, offset < parts.count - 1 || !omitsLastSeparator { base += part.separator }
         }

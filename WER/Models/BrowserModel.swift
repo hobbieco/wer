@@ -13,6 +13,25 @@ final class BrowserModel {
     private(set) var folder: URL
     /// Select 목록에 보여줄 파일 용량(바이트). 폴더·패키지는 없다
     private(set) var fileSizes: [URL: Int64] = [:]
+    /// 현재 폴더 항목의 등록일·수정일. 날짜 조각과 파일 정보에 쓴다
+    private(set) var fileDates: [URL: FileDates] = [:]
+    /// 현재 폴더 밖에 있는 Order 파일의 날짜. 처음 쓸 때 읽어 두고, 폴더를 다시 읽으면 비운다
+    @ObservationIgnored private var outsideFileDates: [URL: FileDates] = [:]
+
+    // 촬영일 백그라운드 수집 (아래 Taken Date Collection)
+    /// 읽은 결과. 수정일이 바뀌면 다시 읽는다
+    @ObservationIgnored private var mediaCache: [URL: MediaCacheEntry] = [:]
+    @ObservationIgnored private var mediaQueue: [URL] = []
+    @ObservationIgnored private var mediaInFlight: Set<URL> = []
+    /// 동시에 읽는 작업들. 비어 있으면 수집 중이 아니다
+    @ObservationIgnored private var mediaWorkers: [Task<Void, Never>] = []
+    /// 읽었지만 아직 화면에 반영하지 않은 파일. 모아서 한 번에 반영한다
+    @ObservationIgnored private var mediaUnflushed: Set<URL> = []
+    @ObservationIgnored private var isMediaFlushScheduled = false
+    /// 촬영일 조각을 쓰는데 아직 읽지 않은 Order의 이미지·영상
+    private(set) var pendingMediaURLs: Set<URL> = []
+    /// 수집 진행 상황. 수집 중이 아니면 nil
+    private(set) var mediaProgress: MediaProgress?
     private(set) var items: [FileItem] = [] {
         didSet { refreshRename() }
     }
@@ -41,7 +60,7 @@ final class BrowserModel {
         }
     }
     var isGoToFolderPresented = false
-    /// Add Empty Files 창 (⌥⌘N)
+    /// Create Empty Files 창 (⌥⌘N)
     var isEmptyFilesPresented = false
 
     /// 칸 구분. 키 입력을 받는 칸을 나타낸다
@@ -105,7 +124,10 @@ final class BrowserModel {
 
     // Run Rename 상태
     var runRequest: RunRequest?
-    private(set) var runState: RunState = .idle
+    private(set) var runState: RunState = .idle {
+        // 실행하는 동안 촬영일 수집을 멈추고, 끝나면 이어 간다
+        didSet { if runState.isRunning != oldValue.isRunning { updateMediaCollection() } }
+    }
     /// 실행 진행률(0~1). nil이면 끝을 알 수 없음(실패 후 되돌리는 중)
     private(set) var runProgress: Double? = 0
     /// 금방 끝나는 실행에서 막대가 깜빡이지 않도록, 0.3초가 지나도 실행 중일 때만 보여준다
@@ -136,9 +158,129 @@ final class BrowserModel {
         }
     }
     /// 마지막으로 선택을 바꾼 목록(Select 또는 Order)의 선택
-    private(set) var previewSelection: Set<URL> = []
+    private(set) var previewSelection: Set<URL> = [] {
+        // 다른 항목을 고르면 파일 정보 레이어를 닫고 미리보기로 돌아간다
+        didSet {
+            guard previewSelection != oldValue else { return }
+            contextMenuURLs = []
+            fileInfoAutoClose?.cancel()
+            isFileInfoShown = false
+            prioritizeMedia(previewSelection)
+            refreshSelectionInfo()
+        }
+    }
+    /// 미리보기 위의 파일 정보 레이어 (⌘I). 선택이 바뀌면 닫힌다. 미리보기가 꺼져 있으면 정보가 늘 보여 쓰지 않는다
+    private(set) var isFileInfoShown = false
+    /// 하나만 고른 항목의 파일 안 정보 (촬영일·크기·길이). 선택이 멈추면 백그라운드로 읽는다
+    private(set) var selectionMedia: SelectionMedia?
+    @ObservationIgnored private var selectionInfoTask: Task<Void, Never>?
 
-    var renameSettings = RenameSettings()
+    var canToggleFileInfo: Bool {
+        AppSettings.isPreviewEnabled && (isFileInfoShown || !previewSelection.isEmpty)
+    }
+
+    func toggleFileInfo() {
+        guard canToggleFileInfo else { return }
+        // ⌘I·버튼으로 열면 자동으로 닫지 않는다
+        fileInfoAutoClose?.cancel()
+        isFileInfoShown.toggle()
+    }
+
+    @ObservationIgnored private var fileInfoAutoClose: Task<Void, Never>?
+    static let briefInfoSeconds: Double = 5
+
+    /// 우클릭 메뉴의 Show Info. 잠깐 확인하는 용도라, 값을 다 읽은 뒤 5초가 지나면 닫는다.
+    /// 그 전에 ⌘I를 누르거나 선택을 바꾸면 타이머는 없어진다
+    func showInfoBriefly() {
+        guard AppSettings.isPreviewEnabled, previewSelection.count >= 1 else { return }
+        fileInfoAutoClose?.cancel()
+        isFileInfoShown = true
+        let selection = previewSelection
+        fileInfoAutoClose = Task { [weak self] in
+            // 촬영일 등을 읽는 중이면 다 읽을 때까지 기다린다 (최대 10초)
+            for _ in 0..<50 {
+                guard let self, !Task.isCancelled else { return }
+                if !self.isWaitingForSelectionMedia { break }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            try? await Task.sleep(for: .seconds(Self.briefInfoSeconds))
+            guard let self, !Task.isCancelled, self.previewSelection == selection else { return }
+            self.isFileInfoShown = false
+        }
+    }
+
+    /// 하나만 고른 이미지·영상·오디오의 정보를 아직 읽는 중인지
+    private var isWaitingForSelectionMedia: Bool {
+        guard previewSelection.count == 1, let url = previewSelection.first,
+              MediaInfoReader.kind(of: url) != nil else { return false }
+        return selectionMedia?.url != url
+    }
+
+    /// 하나만 고르고 0.25초 멈추면 (방향키로 지나가는 파일은 읽지 않는다) 등록일·수정일·용량을 다시 읽고,
+    /// 이미지·영상·오디오면 헤더를 읽어 촬영일 수집과 같은 캐시에 넣는다
+    private func refreshSelectionInfo() {
+        selectionInfoTask?.cancel()
+        guard previewSelection.count == 1, let url = previewSelection.first else {
+            if selectionMedia != nil { selectionMedia = nil }
+            return
+        }
+        let cached = cachedMedia(for: url).map { SelectionMedia(url: url, result: $0) }
+        if selectionMedia != cached { selectionMedia = cached }
+        selectionInfoTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+            await self.refreshAttributes(of: url)
+            guard !Task.isCancelled, MediaInfoReader.kind(of: url) != nil, self.cachedMedia(for: url) == nil else { return }
+            let result = await MediaInfoReader.readInBackground(url)
+            guard !Task.isCancelled else { return }
+            if result != .timedOut { self.storeMedia(result, for: url) }
+            self.selectionMedia = SelectionMedia(url: url, result: result)
+        }
+    }
+
+    /// 폴더를 연 뒤 바뀐 등록일·수정일·용량을 반영한다. 같으면 아무것도 바꾸지 않는다
+    private func refreshAttributes(of url: URL) async {
+        let read = await Task.detached { () -> (dates: FileDates, size: Int64?)? in
+            guard let values = try? url.resourceValues(
+                forKeys: [.creationDateKey, .contentModificationDateKey, .fileSizeKey, .isDirectoryKey]
+            ) else { return nil }
+            let dates = FileDates(created: values.creationDate, modified: values.contentModificationDate)
+            return (dates, values.isDirectory == true ? nil : values.fileSize.map(Int64.init))
+        }.value
+        guard let (dates, size) = read, !Task.isCancelled else { return }
+        var changed = false
+        if fileDates[url] != nil {
+            if fileDates[url] != dates {
+                fileDates[url] = dates
+                changed = true
+            }
+            if let size, fileSizes[url] != size {
+                fileSizes[url] = size
+            }
+        } else if outsideFileDates[url] != dates {
+            outsideFileDates[url] = dates
+            changed = true
+        }
+        if changed, appliedSettings?.usesDates == true { refreshRename() }
+    }
+
+    /// 파일 정보 레이어에 보여줄 선택 항목
+    func fileInfoEntries() -> [FileInfoEntry] {
+        let lookup = Dictionary(items.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
+        let entries = previewSelection.map { url in
+            let item = lookup[url]
+            return FileInfoEntry(
+                url: url, isDirectory: item?.isDirectory ?? false, isInFolder: item != nil, size: fileSizes[url]
+            )
+        }
+        return entries.sorted { $0.url.path < $1.url.path }
+    }
+
+    var renameSettings = RenameSettings() {
+        didSet {
+            if renameSettings.usesMediaMetadata != oldValue.usesMediaMetadata { updateMediaCollection() }
+        }
+    }
     /// Apply로 적용한 설정. nil이면 새 이름을 보여주지 않는다.
     private(set) var appliedSettings: RenameSettings? {
         didSet { refreshRename() }
@@ -187,6 +329,24 @@ final class BrowserModel {
 
     /// Select에서 파일을 하나 이상 골랐는지 (폴더만 고르면 false)
     var hasSelectedFiles: Bool { files.contains { selection.contains($0.url) } }
+    /// Select 선택에 폴더가 섞였는지. 섞이면 Order에 넣지 않는다 (우클릭 메뉴와 같은 규칙)
+    var selectionHasFolders: Bool { items.contains { $0.isDirectory && selection.contains($0.url) } }
+    static let mixedSelectionMessage = "Select only files to add to Order"
+
+    /// ⌘→·Add 버튼·더블클릭. 폴더가 섞인 선택이면 넣지 않고 안내한다. 선택이 없으면 Add 버튼은 전체 파일
+    func addSelectionToOrder(keepsSelection: Bool = false) {
+        guard !selectionHasFolders else { return showNotice(Self.mixedSelectionMessage) }
+        addToOrder(keepsSelection: keepsSelection)
+    }
+
+    /// 우클릭 메뉴의 대상 (우클릭한 줄이 선택 밖이면 그 줄). Services에 넘길 파일로도 쓴다.
+    /// 메뉴를 만들 때 정하고, 선택이 바뀌면 비운다
+    @ObservationIgnored var contextMenuURLs: [URL] = []
+
+    /// Services(WER > Services, 우클릭 메뉴)에 넘길 항목
+    var serviceURLs: [URL] {
+        contextMenuURLs.isEmpty ? Array(previewSelection) : contextMenuURLs
+    }
 
     /// 선택한 파일, 선택이 없으면 폴더의 전체 파일. 하위 폴더는 제외한다.
     var targetFiles: [FileItem] {
@@ -305,10 +465,52 @@ final class BrowserModel {
     /// Space로 미리보기 미디어를 재생/일시정지해 달라는 요청. Preview의 플레이어가 받아 처리한다
     private(set) var playbackToggleRequest: UUID?
 
-    /// 미리보기에 동영상·오디오 하나가 보이고 있을 때
+    /// 미리보기 플레이어가 보이는 파일. 재생할 수 있는 오디오·영상만 플레이어를 띄운다 (PreviewPanel이 알린다)
+    private(set) var previewPlayerURL: URL?
+    /// 미리보기에서 재생 중인지. 재생은 늘 사용자가 시작한다 (Space, 재생 버튼)
+    private(set) var isPreviewPlaying = false
+
+    func previewPlayerChanged(_ url: URL, isShown: Bool) {
+        if isShown {
+            previewPlayerURL = url
+        } else if previewPlayerURL == url {
+            previewPlayerURL = nil
+            isPreviewPlaying = false
+        }
+    }
+
+    func previewPlayingChanged(_ isPlaying: Bool) {
+        if isPreviewPlaying != isPlaying { isPreviewPlaying = isPlaying }
+    }
+
+    /// 재생 중 ←→로 앞뒤 이동 요청
+    struct SeekRequest: Equatable {
+        let id = UUID()
+        let seconds: Double
+    }
+    private(set) var playbackSeekRequest: SeekRequest?
+    static let playbackSeekStep: Double = 10
+    static let volumeStep: Double = 0.1
+
+    func seekPreview(forward: Bool) {
+        guard isPreviewPlaying else { return }
+        playbackSeekRequest = SeekRequest(seconds: forward ? Self.playbackSeekStep : -Self.playbackSeekStep)
+    }
+
+    /// 재생 중 ↑↓로 음량 조절. 음소거 상태에서 올리면 음소거를 푼다
+    func changePreviewVolume(up: Bool) {
+        guard isPreviewPlaying else { return }
+        let defaults = UserDefaults.standard
+        let current = defaults.object(forKey: VolumeControl.volumeKey) as? Double ?? 1
+        let volume = ((current + (up ? Self.volumeStep : -Self.volumeStep)) * 10).rounded() / 10
+        defaults.set(min(max(volume, 0), 1), forKey: VolumeControl.volumeKey)
+        if up, defaults.bool(forKey: VolumeControl.mutedKey) { defaults.set(false, forKey: VolumeControl.mutedKey) }
+    }
+
+    /// 미리보기에 재생할 수 있는 동영상·오디오 하나가 보이고 있을 때
     var canTogglePreviewPlayback: Bool {
         guard AppSettings.isPreviewEnabled, previewSelection.count == 1, let url = previewSelection.first else { return false }
-        return PreviewMediaKind(url) != nil
+        return previewPlayerURL == url
     }
 
     func togglePreviewPlayback() {
@@ -317,7 +519,11 @@ final class BrowserModel {
     }
 
     var playbackUnavailableMessage: String {
-        AppSettings.isPreviewEnabled ? "Select a video or audio file to play" : "Preview is off"
+        guard AppSettings.isPreviewEnabled else { return "Preview is off" }
+        if previewSelection.count == 1, let url = previewSelection.first, PreviewMediaKind(url) != nil {
+            return "This file can't be played in Preview"
+        }
+        return "Select a video or audio file to play"
     }
 
     func applyRenameSettings() {
@@ -349,10 +555,25 @@ final class BrowserModel {
         appliedPresetID = entry.appliedPresetID
     }
 
+    /// 파일의 등록일·수정일. 현재 폴더 밖의 Order 파일은 그때 읽는다
+    func dates(of url: URL) -> FileDates {
+        if let dates = fileDates[url] ?? outsideFileDates[url] { return dates }
+        let dates = FolderLoader.dates(of: url)
+        outsideFileDates[url] = dates
+        return dates
+    }
+
     private func refreshRename() {
-        let built = appliedSettings.map { applied in
-            orderedFiles.enumerated().compactMap { index, item in
-                applied.buildNewName(for: item.name, index: index).map { (item.url, $0) }
+        updateMediaCollection()
+        let built: [(URL, (name: String, highlights: [NameHighlight]))] = appliedSettings.map { applied in
+            let usesDates = applied.usesDates
+            let usesMedia = applied.usesMediaMetadata
+            return orderedFiles.enumerated().compactMap { index, item in
+                // 촬영일을 읽는 중이면 새 이름을 만들지 않는다 (Loading…)
+                if usesMedia, pendingMediaURLs.contains(item.url) { return nil }
+                var dates = usesDates ? dates(of: item.url) : FileDates()
+                if usesMedia { dates.taken = cachedMedia(for: item.url)?.info?.taken }
+                return applied.buildNewName(for: item.name, index: index, dates: dates).map { (item.url, $0) }
             }
         } ?? []
         newNames = Dictionary(built.map { ($0.0, $0.1.name) }, uniquingKeysWith: { first, _ in first })
@@ -386,11 +607,15 @@ final class BrowserModel {
         guard appliedSettings != nil else { return NameIssues() }
         var issues = NameIssues()
         for item in orderedFiles {
+            if isMediaPending(item.url) { continue }
             guard let name = newNames[item.url] else {
                 issues.errors[item.url] = "No new name"
                 continue
             }
-            if name.utf8.count > Self.maxFileNameBytes {
+            // 날짜를 못 찾은 조각만 있으면 빈 이름이 된다
+            if name.isEmpty {
+                issues.errors[item.url] = "Empty name"
+            } else if name.utf8.count > Self.maxFileNameBytes {
                 issues.errors[item.url] = "Name too long (\(name.utf8.count) of \(Self.maxFileNameBytes) bytes)"
             } else if name.hasPrefix(".") {
                 issues.warnings[item.url] = "Starts with \".\" and will be hidden in Finder"
@@ -443,6 +668,7 @@ final class BrowserModel {
 
     /// New Name 앞 경고 아이콘 설명. 문제가 없으면 nil
     func issueDescription(for url: URL) -> String? {
+        if isMediaPending(url) { return "Reading the date taken…" }
         var lines: [String] = []
         if let error = nameIssues.errors[url] { lines.append(error) }
         if let warning = nameIssues.warnings[url] { lines.append(warning) }
@@ -557,13 +783,20 @@ final class BrowserModel {
 
     func reload() {
         do {
-            (items, fileSizes) = try FolderLoader.loadWithSizes(
+            let loaded = try FolderLoader.loadWithSizes(
                 folder, showHidden: showHidden, sort: sort, foldersFirst: AppSettings.sortsFoldersFirst
             )
+            // items를 바꾸면 새 이름을 다시 만들므로 용량·날짜를 먼저 넣는다
+            fileSizes = loaded.sizes
+            fileDates = loaded.dates
+            outsideFileDates = [:]
+            items = loaded.items
             loadError = nil
         } catch {
-            items = []
             fileSizes = [:]
+            fileDates = [:]
+            outsideFileDates = [:]
+            items = []
             loadError = error.localizedDescription
         }
         selection.formIntersection(items.map(\.url))
@@ -599,18 +832,22 @@ final class BrowserModel {
         }
     }
 
-    /// 선택한 항목을 연다 (⌘O). 폴더 하나만 골랐으면 그 폴더로 이동하고, 나머지는 기본 앱(폴더는 Finder)으로 연다
+    /// 선택한 항목을 연다 (⌘O). 하나만 연다: 폴더는 그 폴더로 이동, 파일은 기본 앱으로.
+    /// 여러 개를 한꺼번에 여는 실수를 막아, 여러 개면 열지 않는다 (우클릭 메뉴와 같은 규칙)
     func openSelection() {
-        // Order 목록도 현재 폴더 파일만 담으므로 Select 목록에서 찾는다
-        let selected = items.filter { previewSelection.contains($0.url) }
-        if selected.count == 1, let item = selected.first, item.isDirectory {
-            requestNavigation(to: [item.url])
-            return
-        }
-        selected.forEach { NSWorkspace.shared.open($0.url) }
+        guard canOpenSelection, let url = previewSelection.first else { return }
+        openItem(url)
     }
 
-    var canOpenSelection: Bool { !previewSelection.isEmpty }
+    var canOpenSelection: Bool { previewSelection.count == 1 }
+
+    func openItem(_ url: URL) {
+        if Self.isDirectory(url) {
+            requestNavigation(to: [url])
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
 
     /// Select 목록에서 Return으로 이름을 바꾸는 중인 항목
     var renamingURL: URL?
@@ -1017,6 +1254,8 @@ extension BrowserModel {
         case idle
         case running(done: Int, total: Int, reverting: Bool)
         case finished(String)
+
+        var isRunning: Bool { if case .running = self { true } else { false } }
     }
 
     /// 되돌리기 기록: 실행한 계획과 실행 직전 화면 상태
@@ -1049,17 +1288,19 @@ extension BrowserModel {
     /// Apply된 상태이고 🔴 오류가 없을 때 실행할 수 있다
     var canRun: Bool {
         guard appliedSettings != nil, !isRunning, !orderedFiles.isEmpty else { return false }
+        // 촬영일을 다 읽어야 새 이름이 정해진다
+        if appliedSettings?.usesMediaMetadata == true, !pendingMediaURLs.isEmpty { return false }
         return renameConflicts.order.isEmpty && nameIssues.errors.isEmpty && !makePlan().items.isEmpty
     }
 
     var canUndoRun: Bool { (lastRun != nil || lastEmptyFiles != nil) && !isRunning }
 
     /// 메뉴·버튼의 되돌리기 이름
-    var undoTitle: String { lastEmptyFiles != nil ? "Undo Add Empty Files" : "Undo Last Rename" }
+    var undoTitle: String { lastEmptyFiles != nil ? "Undo Create Empty Files" : "Undo Last Rename" }
 
     /// 실행 로그 제목 줄의 되돌리기 이름
     var runLogUndoTitle: String {
-        if lastEmptyFiles != nil { return "Undo Add Empty Files" }
+        if lastEmptyFiles != nil { return "Undo Create Empty Files" }
         return lastRun?.plan.isCopy == true ? "Undo Copy" : "Undo Rename"
     }
 
@@ -1158,6 +1399,10 @@ extension BrowserModel {
         isRunLogUndoable = true
         let count = plan.items.count
         runLog.append(RenameLogEntry(kind: .info, message: plan.isCopy ? "Copied \(count) files" : "Renamed \(count) files"))
+        // 이름만 바뀐 파일은 촬영일을 다시 읽지 않는다
+        if !plan.isCopy {
+            for item in plan.items { moveMediaCache(from: item.source, to: item.destination) }
+        }
         orderedFiles = []
         orderSelection = []
         appliedSettings = nil
@@ -1195,6 +1440,9 @@ extension BrowserModel {
         for file in outcome.unreverted {
             runLog.append(RenameLogEntry(kind: .warning, message: "Skipped (moved or deleted): \(file.current.lastPathComponent)"))
         }
+        if !record.plan.isCopy {
+            for item in record.plan.items { moveMediaCache(from: item.destination, to: item.source) }
+        }
         reload()
         orderedFiles = record.orderedFiles
         appliedSettings = record.appliedSettings
@@ -1231,6 +1479,8 @@ extension BrowserModel {
     /// 상태 바 오른쪽
     var runStatusText: String {
         switch runState {
+        case .idle where mediaProgress?.isVisible == true, .finished where mediaProgress?.isVisible == true:
+            return mediaProgressText
         case .idle:
             return appliedSettings == nil ? "Apply to preview new names" : "Ready to rename"
         case .running(let done, let total, let reverting):
@@ -1241,7 +1491,7 @@ extension BrowserModel {
     }
 }
 
-// MARK: - Add Empty Files
+// MARK: - Create Empty Files
 
 extension BrowserModel {
     /// 지금 폴더에 빈 파일을 만들 수 있는지 (메뉴·버튼)
@@ -1292,7 +1542,7 @@ extension BrowserModel {
         isRunLogUndoable = false
         let fileManager = FileManager.default
         var removed: Set<URL> = []
-        var log = [RenameLogEntry(kind: .info, message: "Undo add empty files: \(created.count) files")]
+        var log = [RenameLogEntry(kind: .info, message: "Undo create empty files: \(created.count) files")]
         for file in created {
             let name = file.url.lastPathComponent
             let size = (try? file.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
@@ -1326,5 +1576,192 @@ extension BrowserModel {
         runLog = log
         isShowingRunLog = true
         runState = .finished("Removed \(removed.count) empty files")
+    }
+}
+
+// MARK: - Taken Date Collection
+
+/// 촬영일 수집에서 파일 하나의 결과. 읽을 때의 수정일과 함께 둔다
+nonisolated struct MediaCacheEntry {
+    let modified: Date?
+    let result: MediaReadResult
+}
+
+extension BrowserModel {
+    struct MediaProgress: Equatable {
+        var done = 0
+        var total = 0
+        /// 촬영일이 없거나 읽지 못한 파일
+        var notFound = 0
+        /// 금방 끝나면 깜빡이지 않도록 0.5초가 지나도 수집 중일 때만 보여준다
+        var isVisible = false
+        let id = UUID()
+    }
+
+    private static let mediaWorkerCount = 3
+    /// 이만큼 모이면 기다리지 않고 바로 반영한다
+    private static let mediaFlushBatch = 20
+
+    var mediaProgressText: String {
+        guard let progress = mediaProgress else { return "" }
+        return "Reading dates \(progress.done) / \(progress.total)"
+    }
+
+    /// 촬영일 조각을 쓰고 있고, 이 파일을 아직 읽지 않았는지 (New Name에 Loading…)
+    func isMediaPending(_ url: URL) -> Bool {
+        appliedSettings?.usesMediaMetadata == true && pendingMediaURLs.contains(url)
+    }
+
+    /// 편집 중이거나 Apply된 규칙에 촬영일 조각이 있는지
+    var needsMediaMetadata: Bool {
+        renameSettings.usesMediaMetadata || appliedSettings?.usesMediaMetadata == true
+    }
+
+    /// 읽어 둔 결과. 읽은 뒤 파일이 바뀌었으면(수정일이 다르면) nil
+    func cachedMedia(for url: URL) -> MediaReadResult? {
+        guard let entry = mediaCache[url], entry.modified == dates(of: url).modified else { return nil }
+        return entry.result
+    }
+
+    /// 파일 정보 레이어가 읽은 결과도 함께 쓴다
+    func storeMedia(_ result: MediaReadResult, for url: URL) {
+        storeMedia(result, for: url, modified: dates(of: url).modified)
+    }
+
+    /// 수집 조건과 Order를 보고 큐를 다시 맞춘다. 규칙·Order·실행 상태가 바뀔 때 부른다
+    func updateMediaCollection() {
+        guard needsMediaMetadata else { return stopMediaCollection(clearsPending: true) }
+        let needed = Set(orderedFiles.map(\.url).filter {
+            MediaInfoReader.kind(of: $0) != nil && cachedMedia(for: $0) == nil
+        })
+        if pendingMediaURLs != needed { pendingMediaURLs = needed }
+        guard !needed.isEmpty else { return stopMediaCollection(clearsPending: false) }
+        // 실행하는 동안은 파일 이름이 바뀌므로 읽지 않는다
+        if isRunning {
+            cancelMediaWorkers()
+            return
+        }
+        mediaQueue = orderedFiles.map(\.url).filter { needed.contains($0) && !mediaInFlight.contains($0) }
+        prioritizeMedia(previewSelection)
+        if var progress = mediaProgress {
+            let total = progress.done + needed.count
+            if progress.total != total {
+                progress.total = total
+                mediaProgress = progress
+            }
+        } else {
+            let progress = MediaProgress(total: needed.count)
+            mediaProgress = progress
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self, self.mediaProgress?.id == progress.id else { return }
+                self.mediaProgress?.isVisible = true
+            }
+        }
+        startMediaWorkers()
+    }
+
+    /// 미리보기에서 고른 파일을 먼저 읽는다
+    private func prioritizeMedia(_ selection: Set<URL>) {
+        guard selection.count == 1, let url = selection.first, let index = mediaQueue.firstIndex(of: url) else { return }
+        mediaQueue.insert(mediaQueue.remove(at: index), at: 0)
+    }
+
+    private func stopMediaCollection(clearsPending: Bool) {
+        cancelMediaWorkers()
+        if clearsPending, !pendingMediaURLs.isEmpty { pendingMediaURLs = [] }
+        if mediaProgress != nil { mediaProgress = nil }
+    }
+
+    private func cancelMediaWorkers() {
+        mediaWorkers.forEach { $0.cancel() }
+        mediaWorkers = []
+        mediaQueue = []
+        mediaInFlight = []
+    }
+
+    private func startMediaWorkers() {
+        guard mediaWorkers.isEmpty, !mediaQueue.isEmpty else { return }
+        mediaWorkers = (0..<Self.mediaWorkerCount).map { _ in
+            Task { [weak self] in await self?.runMediaWorker() }
+        }
+    }
+
+    /// 큐가 빌 때까지 하나씩 읽는다. 마지막 작업이 끝나면 남은 결과를 반영한다
+    private func runMediaWorker() async {
+        while !Task.isCancelled, let url = nextMediaURL() {
+            let modified = dates(of: url).modified
+            let result = await MediaInfoReader.readInBackground(url)
+            guard !Task.isCancelled else { return }
+            storeMedia(result, for: url, modified: modified)
+        }
+        guard !Task.isCancelled else { return }
+        if mediaInFlight.isEmpty, mediaQueue.isEmpty {
+            mediaWorkers = []
+            flushMedia()
+        }
+    }
+
+    private func nextMediaURL() -> URL? {
+        while !mediaQueue.isEmpty {
+            let url = mediaQueue.removeFirst()
+            if pendingMediaURLs.contains(url), !mediaInFlight.contains(url), cachedMedia(for: url) == nil {
+                mediaInFlight.insert(url)
+                return url
+            }
+        }
+        return nil
+    }
+
+    private func storeMedia(_ result: MediaReadResult, for url: URL, modified: Date?) {
+        mediaInFlight.remove(url)
+        mediaCache[url] = MediaCacheEntry(modified: modified, result: result)
+        // 수집이 먼저 읽은 파일을 고르고 있으면 파일 정보에 바로 보여준다
+        if previewSelection.count == 1, previewSelection.first == url, selectionMedia?.result != result {
+            selectionMedia = SelectionMedia(url: url, result: result)
+        }
+        mediaUnflushed.insert(url)
+        if mediaUnflushed.count >= Self.mediaFlushBatch {
+            flushMedia()
+        } else if !isMediaFlushScheduled {
+            isMediaFlushScheduled = true
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(300))
+                self?.flushMedia()
+            }
+        }
+    }
+
+    /// 모아 둔 결과를 화면에 반영한다
+    private func flushMedia() {
+        isMediaFlushScheduled = false
+        guard !mediaUnflushed.isEmpty else { return }
+        let flushed = mediaUnflushed.intersection(pendingMediaURLs)
+        mediaUnflushed = []
+        guard !flushed.isEmpty else { return }
+        let wasVisible = mediaProgress?.isVisible == true
+        if var progress = mediaProgress {
+            progress.done += flushed.count
+            progress.notFound += flushed.filter { mediaCache[$0]?.result.info?.taken == nil }.count
+            mediaProgress = progress
+        }
+        let finished = mediaProgress
+        pendingMediaURLs.subtract(flushed)
+        // 다 읽었으면 결과를 한 번 알린다 (금방 끝나 진행 상황을 보여주지 않았으면 알리지 않는다)
+        if pendingMediaURLs.isEmpty, wasVisible, let finished {
+            let notFound = finished.notFound > 0 ? " (\(finished.notFound) not found)" : ""
+            showNotice("Read dates of \(finished.done) files\(notFound)")
+        }
+        if appliedSettings?.usesMediaMetadata == true {
+            refreshRename()
+        } else {
+            updateMediaCollection()
+        }
+    }
+
+    private func moveMediaCache(from source: URL, to destination: URL) {
+        guard let entry = mediaCache.removeValue(forKey: source.standardizedFileURL) ?? mediaCache.removeValue(forKey: source)
+        else { return }
+        mediaCache[destination.standardizedFileURL] = entry
     }
 }

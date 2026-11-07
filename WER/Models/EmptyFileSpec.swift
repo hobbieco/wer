@@ -5,7 +5,7 @@
 
 import Foundation
 
-/// Add Empty Files 설정. 설정 > Empty Files의 기본값이고, 창을 열 때마다 이 값으로 시작한다 (창에서 바꾼 값은 저장하지 않는다).
+/// Create Empty Files 설정. 설정 > Empty Files의 기본값이고, 창을 열 때마다 이 값으로 시작한다 (창에서 바꾼 값은 저장하지 않는다).
 /// 입력칸은 글자 그대로 저장하고 빈 칸도 저장한다. 빈 칸은 만들 때 채운다: Name은 wer-create, Max는 Min(없으면 10), Count는 1.
 /// 나중에 프리셋으로 넓힐 수 있게 한 덩어리로 저장한다
 nonisolated struct EmptyFileSpec: Codable, Equatable, Sendable {

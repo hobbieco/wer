@@ -15,7 +15,23 @@ extension BrowserModel {
     var hasOrderWork: Bool { !orderedFiles.isEmpty }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSServicesMenuRequestor {
+    /// Services가 파일을 받을 수 있으면 지금 창의 선택(또는 우클릭 대상)을 넘긴다. 응답자 체인 끝에서 NSApp이 묻는다.
+    /// 우클릭 메뉴에는 Services가 나오지 않는다 (SelectContextMenu 참고, 보류 중)
+    @objc func validRequestor(
+        forSendType sendType: NSPasteboard.PasteboardType?, returnType: NSPasteboard.PasteboardType?
+    ) -> Any? {
+        guard returnType == nil, sendType == .fileURL, let model = BrowserModel.active, !model.serviceURLs.isEmpty
+        else { return nil }
+        return self
+    }
+
+    func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard let urls = BrowserModel.active?.serviceURLs, !urls.isEmpty else { return false }
+        pboard.clearContents()
+        return pboard.writeObjects(urls as [NSURL])
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let models = BrowserModel.open.allObjects
         if models.contains(where: \.isRunning) {

@@ -95,8 +95,41 @@ nonisolated enum AppSettings {
         UserDefaults.standard.object(forKey: previewEnabledKey) as? Bool ?? true
     }
 
-    /// 미리보기에서 동영상·오디오를 바로 재생할지. 기본은 재생하지 않음
-    static let previewAutoplaysMediaKey = "settings.previewAutoplaysMedia"
+    /// Rename 입력칸에 커서가 있을 때 Order 칸 위에 입력 안내를 띄울지. 끄면 입력칸 설명 툴팁도 숨긴다. 기본은 켬
+    static let showsInputGuideKey = "settings.showsInputGuide"
+
+    /// 앱을 시작할 때 Preview 칸을 미리보기로 열지, 파일 정보(Info)로 열지
+    enum PreviewStartMode: String, CaseIterable {
+        /// 마지막에 쓰던 상태 (눈 버튼)
+        case last
+        case preview
+        case info
+
+        var title: String {
+            switch self {
+            case .last: "Last Used"
+            case .preview: "Preview"
+            case .info: "Info"
+            }
+        }
+    }
+
+    static let previewStartModeKey = "settings.previewStartMode"
+
+    /// Select 우클릭 > Open in kitty. 쓸 kitty(앱 또는 실행 파일, 비우면 설치된 kitty), 여는 방식, 원격 제어 소켓
+    static let kittyPathKey = "settings.kittyPath"
+    static let kittyOpenModeKey = "settings.kittyOpenMode"
+    static let kittySocketKey = "settings.kittySocket"
+
+    /// 앱을 시작할 때 한 번 미리보기 켜기/끄기를 정한다. 그 뒤 눈 버튼으로 바꾸는 것은 자유
+    static func applyPreviewStartMode() {
+        let mode = UserDefaults.standard.string(forKey: previewStartModeKey).flatMap(PreviewStartMode.init) ?? .last
+        switch mode {
+        case .last: break
+        case .preview: UserDefaults.standard.set(true, forKey: previewEnabledKey)
+        case .info: UserDefaults.standard.set(false, forKey: previewEnabledKey)
+        }
+    }
     static let builtInCopyFolderName = "wer-rename"
     /// 예전 설정 > General > Default Field Values (종류를 고를 때 채우던 값). 지금은 빈 칸으로 시작해서 쓰지 않고,
     /// 예전 프리셋의 빈 칸을 한 번 채울 때만 읽는다
@@ -193,7 +226,7 @@ nonisolated struct RenameDefaults: Equatable, Codable {
     /// 첫 번째 칸 값
     func value(for kind: NameToken.Kind) -> String {
         switch kind {
-        case .none, .changeExtension, .removeExtension, .addExtension: ""
+        case .none, .changeExtension, .removeExtension, .addExtension, .createdDate, .modifiedDate, .takenDate, .replace: ""
         case .text: text
         case .number: number
         case .regex: regex
@@ -203,7 +236,7 @@ nonisolated struct RenameDefaults: Equatable, Codable {
     /// 두 번째 칸 값 (Text 뒤 문자열, Number 증가 폭, Regex 채우기, 바꿀 확장자)
     func option(for kind: NameToken.Kind) -> String {
         switch kind {
-        case .none, .changeExtension, .removeExtension, .addExtension: ""
+        case .none, .changeExtension, .removeExtension, .addExtension, .createdDate, .modifiedDate, .takenDate, .replace: ""
         case .text: textSuffix
         case .number: numberStep
         case .regex: regexPad

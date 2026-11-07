@@ -11,15 +11,18 @@ struct PaneLayout {
     static let defaultSelectWidth: Double = 320
     static let defaultRenameWidth: Double = 440
 
-    // 상단 버튼 줄(Go to Folder, 아이콘 3개, Add)이 잘리지 않는 폭
-    static let minSelect: CGFloat = 320
-    static let minOrder: CGFloat = 480
-    // 입력칸이 고정폭 글꼴이라 조금 넓게
-    static let minRename: CGFloat = 420
+    // 최소 폭은 MacBook Pro 14인치의 가장 좁은 설정(1024×665)에서 세 칸이 모두 들어가도록 잡는다 (290 + 400 + 330 + 2 = 1022).
+    // 더 좁은 화면이면 Select를 접은 채 연다
+    // 상단 버튼 줄(Go to Folder, 아이콘 2개, Add)이 잘리지 않는 폭
+    static let minSelect: CGFloat = 290
+    // 버튼 줄(Remove, 이동 6개, Reverse)이 잘리지 않는 폭
+    static let minOrder: CGFloat = 400
+    // 조각 줄의 고정 폭(손잡이 18, 종류 90, 두 번째 칸 64, 구분자 26, 간격 6×4, 여백) 약 238을 빼고 값 입력칸이 약 92 남는 폭
+    static let minRename: CGFloat = 330
     static let collapsedWidth: CGFloat = 28
-    /// 창 최소 높이. 최소 폭의 Rename 칸에서 Preview가 거의 정사각형이 되는 높이
-    /// (Preview 위 Rename 설정·경로 줄 약 355pt + 아래 상태 바 약 35pt + Preview 약 350pt (실제로 보면 이 정도가 정사각형에 가깝다))
-    static let minHeight: CGFloat = 740
+    /// 창 최소 높이. MacBook Pro 14인치의 가장 큰 글자 설정(1024×665)에서 메뉴 막대·제목 막대를 빼고 들어가는 높이
+    /// (Preview 위 Rename 설정·경로 줄 약 355pt + 아래 상태 바 약 35pt + Preview 약 210pt)
+    static let minHeight: CGFloat = 600
     /// 칸 사이 경계선 2개의 폭
     static let handlesWidth: CGFloat = 2
 

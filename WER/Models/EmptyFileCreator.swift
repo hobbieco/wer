@@ -5,7 +5,7 @@
 
 import Foundation
 
-/// Add Empty Files의 실제 파일 작업. 이미 있는 이름은 절대 덮어쓰지 않는다 (O_EXCL).
+/// Create Empty Files의 실제 파일 작업. 이미 있는 이름은 절대 덮어쓰지 않는다 (O_EXCL).
 /// 취소하거나 실패하면 이번에 만든 파일만 지운다
 nonisolated enum EmptyFileCreator {
     struct Failure: Error, LocalizedError {
