@@ -135,3 +135,6 @@ iOSInjectionProject/
 ### WER ###
 # 개인 서명 설정 (Config/Local.xcconfig.example 참고)
 Config/Local.xcconfig
+
+# Claude Code (personal settings)
+.claude/

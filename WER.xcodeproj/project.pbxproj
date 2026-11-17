@@ -349,6 +349,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/WER-Info.plist";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 hobbieco";
 				INFOPLIST_KEY_NSNetworkVolumesUsageDescription = "WER needs access to network volumes to list and rename files you choose there.";
 				INFOPLIST_KEY_NSRemovableVolumesUsageDescription = "WER needs access to removable volumes to list and rename files you choose there.";
@@ -384,6 +385,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/WER-Info.plist";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 hobbieco";
 				INFOPLIST_KEY_NSNetworkVolumesUsageDescription = "WER needs access to network volumes to list and rename files you choose there.";
 				INFOPLIST_KEY_NSRemovableVolumesUsageDescription = "WER needs access to removable volumes to list and rename files you choose there.";
