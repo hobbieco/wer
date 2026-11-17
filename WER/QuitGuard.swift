@@ -90,6 +90,42 @@ struct WindowCloseGuard: NSViewRepresentable {
             self.window = window
             original = window.delegate
             window.delegate = self
+            restoreFrame(of: window)
+            for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+                NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { note in
+                    guard let window = note.object as? NSWindow else { return }
+                    MainActor.assumeIsolated {
+                        UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: "mainWindowFrame")
+                    }
+                }
+            }
+        }
+
+        private static let frameKey = "mainWindowFrame"
+        /// 앱을 켠 뒤 첫 창만 복원한다 (⌘N 창은 macOS가 겹쳐 놓는다)
+        private static var didRestore = false
+
+        /// SwiftUI가 창 위치를 안정적으로 복원하지 못해(다중 모니터에서 모니터·크기가 매번 달라짐) 직접 저장·복원한다.
+        /// 저장한 위치가 지금 연결된 모니터 안이 아니면 그대로 둔다
+        private func restoreFrame(of window: NSWindow) {
+            guard !Self.didRestore else { return }
+            Self.didRestore = true
+            guard let saved = UserDefaults.standard.string(forKey: "mainWindowFrame") else { return }
+            let frame = NSRectFromString(saved)
+            guard !frame.isEmpty else { return }
+            // 가장 많이 겹치는 모니터를 고르고, 그 화면 안에 들어오게 크기·위치를 맞춘다 (모니터·해상도가 바뀐 경우 대비)
+            func overlap(_ screen: NSScreen) -> CGFloat {
+                let r = screen.visibleFrame.intersection(frame)
+                return r.isNull ? 0 : r.width * r.height
+            }
+            guard let screen = NSScreen.screens.max(by: { overlap($0) < overlap($1) }), overlap(screen) > 0 else { return }
+            let visible = screen.visibleFrame
+            var fitted = frame
+            fitted.size.width = min(fitted.width, visible.width)
+            fitted.size.height = min(fitted.height, visible.height)
+            fitted.origin.x = min(max(fitted.minX, visible.minX), visible.maxX - fitted.width)
+            fitted.origin.y = min(max(fitted.minY, visible.minY), visible.maxY - fitted.height)
+            window.setFrame(fitted, display: true)
         }
 
         nonisolated override func responds(to selector: Selector!) -> Bool {
